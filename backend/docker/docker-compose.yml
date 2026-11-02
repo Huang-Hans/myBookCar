@@ -1,0 +1,134 @@
+# LMS 开发基础设施：Kafka + MongoDB + Redis
+#
+# 启动（在仓库根目录执行）：docker compose -p lms -f backend/docker/docker-compose.yml up -d
+# 停止：                     docker compose -p lms -f backend/docker/docker-compose.yml down
+# 连同数据一起清掉：上面命令加 -v
+# 只起其中几个：命令末尾加服务名，例如 ... up -d mongodb
+#
+# 项目名用 -p lms 指定，不写顶层 name 字段；version 字段供 compose v1 识别文件格式
+# （部署机上可能只有 compose v1，它不认识 name，会直接拒绝文件），compose v2 会提示该字段过时，忽略即可。
+#
+# MongoDB：单节点副本集（rs0）、不启用授权。写入用例使用多文档事务，单机模式不支持事务，
+# 因此必须以副本集方式启动；首次启动后需要执行一次 backend/docker/bootstrap-mongodb.sh 完成初始化。
+#
+# 未启用授权意味着：能连到本机的任何人都可以读写全部数据库。本配置只适合受信任的
+# 开发网络；对外开放或多人共享时，应改回带账号与副本集密钥的配置。
+#
+# 副本集成员地址必须是客户端可达的地址，用 MONGO_REPLICA_HOST 指定（同目录 .env）：
+#   本机开发    默认 localhost:27017
+#   共享开发机  MONGO_REPLICA_HOST=192.168.30.65:27017
+#
+# 应用侧连接配置（连接串必须带 replicaSet=rs0，否则事务不可用）：
+#   Platform   mongodb://<host>:27017/lms_platform?replicaSet=rs0
+#   Dispatch   mongodb://<host>:27017/lms_dispatch?replicaSet=rs0
+#   Booking    mongodb://<host>:27017/lms_booking?replicaSet=rs0
+#   Kafka      Kafka:BootstrapServers = <host>:9092（广告地址同样取 KAFKA_ADVERTISED_HOST）
+#   Redis      <host>:6379（未设密码，可用 db 0-15）
+#
+# compass-web：浏览器里使用 MongoDB Compass 的界面（第三方封装，镜像 haohanyang/compass-web），
+# 访问 http://<host>:8081 。容器内的 Compass 服务端直连本 compose 的 mongodb，
+# 连接串由 --mongo-uri 预先给定，不必在界面里再填。
+# 界面用 HTTP Basic 认证，用户名/口令默认 lms / lms-local-dev，
+# 共享部署时用 .env 里的 COMPASS_WEB_USERNAME / COMPASS_WEB_PASSWORD 覆盖。
+
+version: "3.8"
+
+services:
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: lms-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft 单节点：broker 与 controller 合一，无需 ZooKeeper
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      # 广告地址必须是客户端可达的地址，否则客户端拿到 localhost:9092 后连不上
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_ADVERTISED_HOST:-localhost}:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # 单节点必须把副本数压到 1，否则内部 topic 建不出来
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  mongodb:
+    image: mongo:7.0
+    container_name: lms-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    # 副本集模式：客户端连接串需要带 replicaSet=rs0；bind_ip_all 供宿主机以外的客户端接入。
+    # 未启用授权，见文件头部的适用范围说明。
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand(\"ping\").ok' 127.0.0.1:27017/admin >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: lms-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # 浏览器里的 Compass：服务端在容器内连接 mongodb，界面通过 HTTP Basic 认证暴露。
+  # 需要更多连接时，把多个连接串用空格分隔写在 --mongo-uri 后面。
+  # --enable-shell 打开集成 mongo shell（镜像需 >= 0.5.0）：相当于给能登录该界面的人一个
+  # 直连数据库的 shell，而 MongoDB 目前未启用授权，因此只适合受信任的开发网络。
+  compass-web:
+    image: haohanyang/compass-web:latest
+    container_name: lms-compass-web
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    command:
+      - compass-web
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8080"
+      - --enable-shell
+      - --mongo-uri
+      - mongodb://mongodb:27017
+      - --basic-auth-username
+      - ${COMPASS_WEB_USERNAME:-lms}
+      - --basic-auth-password
+      - ${COMPASS_WEB_PASSWORD:-lms-local-dev}
+    depends_on:
+      - mongodb
+
+volumes:
+  kafka-data:
+  mongodb-data:
+  redis-data:

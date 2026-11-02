@@ -1,0 +1,396 @@
+openapi: 3.0.3
+info:
+  title: LMS API Gateway
+  version: 1.0.0
+  description: >-
+    Gateway login, token refresh and technical endpoints of LMS.ApiGateway. Business routes are forwarded to
+    downstream services by an allow-list of /api/{service}/{identityScope}/v1/{resource}, where identityScope is staff
+    (Keycloak staff token, scheme bearerAuth), driver or customer (LMS local token, scheme lmsAppBearer); unknown scopes
+    and unlisted resources are not forwarded. The staff login and refresh paths /api/v1/login and /api/v1/refresh below are
+    the only exception to this layout and stay unchanged. Login exchanges username and password for Keycloak tokens, using the
+    configured Login:TokenEndpoint and Login:ClientId; refresh exchanges a refresh token for a new token set the same way. Gateway-produced errors use the unified envelope.
+    Application codes are registered in docs/api/error-codes.md.
+servers:
+  - url: http://localhost:5088
+    description: Development
+paths:
+  /api/v1/login:
+    post:
+      operationId: login
+      tags: [Authentication]
+      summary: Sign in with a username and password
+      description: >-
+        No bearer token is required. WINSON-DEVIATION: the explicitly requested login action
+        uses a login route. The request is JSON; the upstream Keycloak request is
+        application/x-www-form-urlencoded with grant_type=password and the configured client_id.
+        Credentials are forwarded exactly as supplied. Tokens are returned using camelCase
+        fields inside the success envelope. All login responses use Cache-Control: no-store
+        and Pragma: no-cache. The identity provider request is not retried or redirected.
+        Development uses the supplied realm lms token endpoint. Other environments must set
+        Login:TokenEndpoint (environment variable Login__TokenEndpoint); an empty endpoint returns 503.
+        After Keycloak accepts the credentials, the gateway sends the new access token to Platform to check
+        the LMS user. The subject must already be linked to an active LMS user whose corporate email equals the
+        verified email in the token, or, on first sign-in, the
+        token must carry a verified corporate email matching an active LMS user that is not yet linked; that
+        user is then linked once and audited. This endpoint is for staff only: drivers and customers do not sign in here and
+        never go through Keycloak, they use POST /api/platform/driver/v1/logins and POST /api/platform/customer/v1/logins
+        (LMS local identity service). Otherwise login answers 403 / 40300 and no tokens are returned.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Tokens issued by the identity provider.
+          headers:
+            X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+            Cache-Control:
+              description: Prevent storage of credentials and tokens.
+              schema: { type: string, example: no-store }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/LoginResponse' }
+        '400': { $ref: '#/components/responses/LoginValidationError' }
+        '401': { $ref: '#/components/responses/LoginAuthenticationError' }
+        '403': { $ref: '#/components/responses/LoginLmsUserError' }
+        '415': { $ref: '#/components/responses/LoginMediaTypeError' }
+        '500': { $ref: '#/components/responses/GatewayError' }
+        '502': { $ref: '#/components/responses/GatewayError' }
+        '503': { $ref: '#/components/responses/GatewayError' }
+        '504': { $ref: '#/components/responses/GatewayError' }
+  /api/v1/refresh:
+    post:
+      operationId: refreshToken
+      tags: [Authentication]
+      summary: Exchange a refresh token for a new access token
+      description: >-
+        No bearer token is required: the access token is usually expired when this is called.
+        WINSON-DEVIATION: the refresh action sits next to the explicitly requested login route and
+        follows its naming. The request is JSON; the upstream Keycloak request is
+        application/x-www-form-urlencoded with grant_type=refresh_token and the configured client_id.
+        The refresh token is forwarded exactly as supplied. The response has the same shape as login.
+        Keycloak may rotate the refresh token, so callers must keep the one returned here. A rejected
+        refresh token (expired, revoked or session ended) answers 40100 and the caller should sign in
+        again. All responses use Cache-Control: no-store and Pragma: no-cache. The identity provider
+        request is not retried or redirected. An empty Login:TokenEndpoint returns 503.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshTokenRequest' }
+      responses:
+        '200':
+          description: New tokens issued by the identity provider.
+          headers:
+            X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+            Cache-Control:
+              description: Prevent storage of tokens.
+              schema: { type: string, example: no-store }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/LoginResponse' }
+        '400': { $ref: '#/components/responses/LoginValidationError' }
+        '401': { $ref: '#/components/responses/RefreshAuthenticationError' }
+        '415': { $ref: '#/components/responses/LoginMediaTypeError' }
+        '500': { $ref: '#/components/responses/GatewayError' }
+        '502': { $ref: '#/components/responses/GatewayError' }
+        '503': { $ref: '#/components/responses/GatewayError' }
+        '504': { $ref: '#/components/responses/GatewayError' }
+  /:
+    get:
+      operationId: getGatewayBanner
+      summary: Gateway banner
+      responses:
+        '200':
+          description: Service name and description.
+          headers:
+            X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ServiceBanner' }
+        '500': { $ref: '#/components/responses/GatewayError' }
+  /healthz:
+    get:
+      operationId: getGatewayLiveness
+      summary: Liveness probe of the gateway process
+      description: >-
+        Outside the business envelope. Always mapped in Development; elsewhere only when
+        HealthEndpoints:Enabled is true. Internal use only.
+      responses:
+        '200':
+          description: Process is alive. Plain text body.
+          content:
+            text/plain:
+              schema: { type: string, example: Healthy }
+  /readyz:
+    get:
+      operationId: getGatewayReadiness
+      summary: Readiness probe of the gateway process
+      description: >-
+        Outside the business envelope. Checks only the process itself.
+        Same exposure rules as /healthz.
+      responses:
+        '200':
+          description: Ready to accept traffic. Plain text body.
+          content:
+            text/plain:
+              schema: { type: string, example: Healthy }
+  /swagger:
+    get:
+      operationId: getGatewayApiReference
+      summary: Scalar API reference UI
+      description: >-
+        Outside the business envelope. Scalar UI listing the gateway document and the documents of
+        the services it forwards to; the framework matches the ccp project (Swashbuckle generates,
+        Scalar renders). Mapped in Development only.
+      responses:
+        '200':
+          description: HTML page.
+          content:
+            text/html:
+              schema: { type: string }
+  /swagger/v1/swagger.json:
+    get:
+      operationId: getGatewayApiDocument
+      summary: Gateway OpenAPI 3.0 document
+      description: >-
+        Outside the business envelope. Generated from the running code by Swashbuckle; the
+        hand-written contract in this file stays normative. Mapped in Development only.
+      responses:
+        '200':
+          description: OpenAPI document. Plain JSON body.
+          content:
+            application/json:
+              schema: { type: object }
+  /openapi/platform.json:
+    get:
+      operationId: getPlatformApiDocument
+      summary: Platform service OpenAPI document
+      description: >-
+        Outside the business envelope. The document published by LMS.Platform.Api, fetched through
+        service discovery and passed through unchanged. Kept outside /swagger because that path space
+        belongs to the document generator. Mapped in Development only. Answers 502 (50200) when the
+        service cannot be reached.
+      responses:
+        '200':
+          description: OpenAPI document of the platform service. Plain JSON body.
+          content:
+            application/json:
+              schema: { type: object }
+        '502': { $ref: '#/components/responses/GatewayError' }
+components:
+  headers:
+    TraceId:
+      description: Trace id of the request, identical to the traceId in the body.
+      schema: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+  responses:
+    LoginValidationError:
+      description: Malformed JSON or empty body (40000); missing, unknown or invalid fields (40001).
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    LoginAuthenticationError:
+      description: Keycloak rejected the supplied credentials with invalid_grant (40100). Provider details are not exposed.
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    LoginLmsUserError:
+      description: >-
+        Keycloak accepted the credentials but the subject has no usable LMS user (40300): linked but the token has
+        no verified email or it differs from the LMS corporate email; not linked and no verified email matching an
+        active unlinked LMS user; or the LMS user is inactive. No tokens are returned.
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    RefreshAuthenticationError:
+      description: Keycloak rejected the refresh token with invalid_grant (40100). Provider details are not exposed; sign in again.
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    LoginMediaTypeError:
+      description: Login accepts application/json only (40000).
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    GatewayError:
+      description: >-
+        Error produced by the gateway: 404/40400 no route, 500/50000 internal error,
+        502/50200 bad gateway, 503/50300 service unavailable, 504/50400 gateway timeout.
+        Login returns 502 when Keycloak cannot be reached, rejects the configured client or grant,
+        returns any other unsuccessful response, or returns malformed token data.
+        Login returns 503 when its endpoint is unconfigured or Keycloak returns 503,
+        and 504 when the configured token request timeout is exceeded. The same mapping applies to the
+        Platform LMS user check that follows a successful Keycloak sign-in.
+      headers:
+        X-Trace-Id: { $ref: '#/components/headers/TraceId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          examples:
+            badGateway:
+              value:
+                code: 50200
+                message: Bad gateway
+                errors: []
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+  schemas:
+    LoginRequest:
+      type: object
+      description: Identity provider credentials. The gateway supplies client_id and grant_type.
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          description: Identity provider username; must not be blank. Forwarded without normalization.
+          example: user-name
+        password:
+          type: string
+          minLength: 1
+          format: password
+          writeOnly: true
+          description: Password; must not be empty. Whitespace is preserved.
+      example: { username: user-name, password: '<password>' }
+    RefreshTokenRequest:
+      type: object
+      description: Refresh token issued by a previous login or refresh. The gateway supplies client_id and grant_type.
+      additionalProperties: false
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: Refresh token; must not be blank. Forwarded without normalization.
+      example: { refreshToken: '<refresh-token>' }
+    LoginResponse:
+      type: object
+      description: Keycloak token response mapped to camelCase. Optional fields are omitted when absent.
+      required: [accessToken, expiresIn, tokenType]
+      properties:
+        accessToken:
+          type: string
+          description: Access token used as Authorization Bearer credentials.
+          example: '<access-token>'
+        expiresIn:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Access token lifetime in seconds.
+          example: 900
+        tokenType:
+          type: string
+          description: Token type returned by Keycloak.
+          example: Bearer
+        refreshToken:
+          type: string
+          nullable: true
+          description: Refresh token, omitted when not issued.
+          example: '<refresh-token>'
+        refreshExpiresIn:
+          type: integer
+          format: int64
+          nullable: true
+          description: Refresh token lifetime in seconds, omitted when not provided.
+          example: 1800
+        scope:
+          type: string
+          nullable: true
+          description: Granted scopes, omitted when not provided.
+          example: profile email
+        sessionState:
+          type: string
+          nullable: true
+          description: Identity provider session identifier, omitted when not provided.
+          example: '<session-id>'
+        notBeforePolicy:
+          type: integer
+          format: int64
+          nullable: true
+          description: Identity provider not-before policy, omitted when not provided.
+          example: 0
+      example:
+        accessToken: '<access-token>'
+        expiresIn: 900
+        tokenType: Bearer
+        refreshToken: '<refresh-token>'
+        refreshExpiresIn: 1800
+        scope: profile email
+    SuccessEnvelope:
+      type: object
+      description: Success envelope. data is the business payload; meta is present only when there is metadata.
+      required: [code, message, traceId]
+      properties:
+        code: { type: integer, description: Application code, example: 20000 }
+        message: { type: string, example: success }
+        data: { nullable: true, description: Business payload. Omitted when null. }
+        traceId: { type: string, description: W3C trace id, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+      example:
+        code: 20000
+        message: success
+        data: {}
+        traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+    ErrorEnvelope:
+      type: object
+      description: Failure envelope. data is always omitted; errors is always present and may be empty.
+      required: [code, message, errors, traceId]
+      properties:
+        code: { type: integer, description: Application code, example: 50200 }
+        message: { type: string, example: Bad gateway }
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/FieldError' }
+        traceId: { type: string, description: W3C trace id, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+      example:
+        code: 50200
+        message: Bad gateway
+        errors: []
+        traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+    FieldError:
+      type: object
+      description: Field-level error, including login request validation failures.
+      required: [field, message]
+      properties:
+        field: { type: string, example: pageSize }
+        message: { type: string, example: Must be between 1 and 100 }
+        code: { type: string, nullable: true, description: Optional field error code. Omitted when null. }
+      example: { field: pageSize, message: Must be between 1 and 100 }
+    ServiceBanner:
+      type: object
+      description: Real program information of the running service.
+      required: [serviceName, description]
+      properties:
+        serviceName: { type: string, example: LMS.ApiGateway }
+        description: { type: string, example: LMS API Gateway }
+      example: { serviceName: LMS.ApiGateway, description: LMS API Gateway }

@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "LMS Client 出行预订模块"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "LMS Client 出行预订应用"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "$string:app_name"
+    },
+    {
+      "name": "location_reason",
+      "value": "用于获取上车位置并提供行程预订服务"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="trip_location_channel_name">行程定位</string>
+    <string name="trip_location_notification_title">行程进行中</string>
+    <string name="trip_location_notification_text">正在与乘客和客服共享位置</string>
+</resources>

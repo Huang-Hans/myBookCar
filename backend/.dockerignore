@@ -1,0 +1,16 @@
+# 镜像构建上下文是 backend/（各服务 Dockerfile 见 src/**/Dockerfile）。
+# 排除版本库元数据、本机 IDE 配置与本机构建产物：它们不进镜像，也避免每次构建都让层缓存失效。
+.git
+.gitignore
+.idea
+.vs
+**/bin
+**/obj
+**/*.user
+**/*.suo
+**/TestResults
+**/artifacts
+**/.DS_Store
+
+# 部署机的本机配置（含机密），不得进入镜像
+docker/.env

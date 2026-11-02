@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>078c8f9b-3bd8-4b62-a0c4-cc750d9f1df8</UserSecretsId>
+    <!-- 输出 XML 注释供 Swagger 展示接口与契约说明。
+         1591：不强制为每个公开成员写注释；1573：动作只在契约参数上写 param，CancellationToken 不参与文档。 -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591;1573</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MessagePack" Version="3.1.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\LMS.ServiceDefaults\LMS.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\..\..\LMS.BuildingBlocks.Identity\LMS.BuildingBlocks.Identity.csproj" />
+    <ProjectReference Include="..\LMS.Notification.Application\LMS.Notification.Application.csproj" />
+    <ProjectReference Include="..\LMS.Notification.Infrastructure\LMS.Notification.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

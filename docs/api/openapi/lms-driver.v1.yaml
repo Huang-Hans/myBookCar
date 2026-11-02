@@ -1,0 +1,811 @@
+openapi: 3.0.3
+info:
+  title: LMS Driver API (v1, Phases 1-2)
+  version: 1.0.0
+  description: >-
+    Backend capabilities behind the driver app Home and History screens: own profile and working status (D01/D02),
+    dispatch offers (D03/D04), own trips with fulfilment progress (D05-D07) and phone + password login. Served by Dispatch (D01-D04),
+    Booking (D05-D07) and Platform (login / refresh / logout) behind the gateway. Paths, DTOs and codes follow
+    docs/design/LMS-plan-20261011-04-driver-customer-web-phases.md section 7; application codes are registered in
+    docs/api/error-codes.md (no new codes). Every response uses the unified envelope and carries traceId
+    (body + X-Trace-Id header). Driver endpoints require an LMS local access token (security scheme lmsAppBearer) issued by the
+    driver login entry POST /api/platform/driver/v1/logins; Keycloak is not involved and the principal type is fixed to DRIVER by
+    the entry. The driver id is NEVER read from the path, query or body - it comes only from the token subject (driverId), which
+    Dispatch confirms still exists. A staff token (a different issuer) is answered with 401 / 40100 and a customer token with
+    403 / 40300. The former Keycloak principal-binding management API (PB01-PB03) has been removed; old bindings are neither read nor migrated. Every operation can answer 503 / 50300 when the authorization source or a dependent service is
+    unavailable; an unavailable source is never reported as an empty result. All times are ISO 8601 UTC (Z).
+    Internal service-to-service endpoints (offer creation, assignment, catalog) are not published through the gateway.
+    Phase 2 adds inspections (D2-01..D2-04), vehicle issues (D2-05..D2-07), preferences (D2-08/D2-09), operations contacts and incident reports (D2-10..D2-13). Each is scoped to the bound driver in the stored query; records are facts as saved here (RECORDED), never an assumed acceptance.
+servers:
+  - url: http://localhost:5088
+    description: API gateway (Development)
+tags:
+  - name: Driver Authentication
+  - name: Driver Self
+  - name: Driver Offers
+  - name: Driver Trips
+  - name: Driver Inspections
+  - name: Driver Reports
+  - name: Driver Preferences
+  - name: Driver Incidents
+security:
+  - lmsAppBearer: []
+paths:
+  /api/dispatch/driver/v1/me:
+    get:
+      tags: [Driver Self]
+      operationId: getDriverSelf
+      summary: D01 Own driver profile, working status and capabilities (permission driver-self:read)
+      description: >-
+        Allowed-field profile only (no licence number or emergency contact). When the stored working status is ON_TRIP the
+        server reconciles it with Booking's authoritative active trip: a trip that already finished or was cancelled releases
+        the driver to AVAILABLE (source TRIP_RECONCILIATION); if Booking cannot answer the call fails with 503 rather than
+        returning a stale status. Responses are not cacheable (Cache-Control no-store).
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverSelfView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/driver/v1/me/availability:
+    patch:
+      tags: [Driver Self]
+      operationId: changeDriverAvailability
+      summary: D02 Change own working status AVAILABLE / BREAK / OFF_DUTY (permission driver-self:write)
+      description: >-
+        ON_TRIP is driven by a valid assignment and cannot be self-reported. Repeating the current status is a no-op that returns
+        the current profile (idempotent). An inactive or suspended driver, or a driver on an active trip, is rejected with 422.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ChangeAvailabilityRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverSelfView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/driver/v1/me/offers:
+    get:
+      tags: [Driver Offers]
+      operationId: listDriverOffers
+      summary: D03 Own live dispatch offers (permission driver-self:read)
+      description: >-
+        Only PENDING offers that have not expired, and ACCEPTING offers (accepted, awaiting the authoritative assignment).
+        Every item carries serverTime and expiresAt; the countdown is judged by the server, a local timer is display-only.
+        Default sort expiresAt,offerId. Not cacheable.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - { name: sort, in: query, required: false, description: 'Allowed: expiresAt, createdAt, offerId. Default expiresAt,offerId.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/DriverOfferView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/driver/v1/me/offers/{offerId}/responses:
+    parameters:
+      - { name: offerId, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Driver Offers]
+      operationId: respondToDriverOffer
+      summary: D04 Accept or decline an offer (permission driver-trips:write)
+      description: >-
+        The offer state machine is idempotent: repeating the same decision returns the same result, a contrary decision or a
+        closed (expired / superseded) offer answers 409. ACCEPT checks the driver is ACTIVE and AVAILABLE, marks the offer ACCEPTING
+        (persisted), then asks Booking for a conditional assignment keyed by the offerId. Only after Booking commits does the
+        offer become ACCEPTED and the driver ON_TRIP (200). If Booking cannot be reached the result is 202 with status ACCEPTING:
+        retry the same request, the same offerId never produces a second assignment. If the trip can no longer be assigned
+        (assigned to someone else, cancelled, driver already has an active trip) the offer becomes SUPERSEDED and the call answers 409.
+        Declining or letting an offer expire is not a trip cancellation and never reaches the driver's history. Another driver's offer is 404.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/OfferResponseRequest' } } } }
+      responses:
+        '200': { description: Offer closed as ACCEPTED or DECLINED, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverOfferView' } } } ] } } } }
+        '202': { description: Accepted but the authoritative assignment is not confirmed yet (status ACCEPTING); retry the same call, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverOfferView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/driver/v1/me/trips:
+    get:
+      tags: [Driver Trips]
+      operationId: listDriverTrips
+      summary: D05 Own trips - current (view=ACTIVE) or history (view=HISTORY) (permission driver-trips:read)
+      description: >-
+        Ownership is enforced in the stored query (assignment.driverId equals the bound driver). view=ACTIVE returns the driver's
+        current assigned, non-terminal trip(s); an empty list is a real empty result and a failed query is an error, never an empty list.
+        view=HISTORY returns COMPLETED and CANCELLED trips attributed to the driver (a trip cancelled after acceptance stays in
+        history; declined or expired offers never do), filter with status, default sort -closedAt,-pickupAt,tripId, stable paging.
+        Legacy trips without an assignment are attributed to nobody; actual times are never back-filled from the planned pickup time. Not cacheable.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - { name: sort, in: query, required: false, description: 'Allowed: closedAt, pickupAt, createdAt, tripReference, tripId. Default -closedAt,-pickupAt,tripId.', schema: { type: string } }
+        - { name: view, in: query, required: false, description: 'ACTIVE (default) or HISTORY.', schema: { type: string, enum: [ACTIVE, HISTORY], default: ACTIVE } }
+        - { name: status, in: query, required: false, description: 'HISTORY only: COMPLETED or CANCELLED.', schema: { type: string, enum: [COMPLETED, CANCELLED] } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/DriverTripSummaryView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/driver/v1/me/trips/{tripId}:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Driver Trips]
+      operationId: getDriverTrip
+      summary: D06 Own trip detail with progress and allowed actions (permission driver-trips:read)
+      description: >-
+        Passenger name and masked phone, special requests (the only customer-service note exposed), fulfilment times, events and the
+        server-decided allowedActions. contact.canContactPassenger is false until a real contact channel is integrated (Q07);
+        a dialable number is never derived from the masked phone. A trip that is not assigned to the caller is 404. Not cacheable.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverTripDetailView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/driver/v1/me/trips/{tripId}/progress-events:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Driver Trips]
+      operationId: createDriverTripProgressEvent
+      summary: D07 Submit the next fulfilment action (permission driver-trips:write)
+      description: >-
+        Requires Idempotency-Key. The target status is decided by the server state machine, the client cannot submit a status:
+        DRIVER_ASSIGNED -> START_EN_ROUTE -> DRIVER_EN_ROUTE -> ARRIVE_AT_PICKUP -> ARRIVED_AT_PICKUP -> PICK_UP_PASSENGER -> IN_PROGRESS
+        -> START_TRANSIT -> ARRIVE_AT_DESTINATION -> COMPLETE_TRIP -> COMPLETED. START_TRANSIT and ARRIVE_AT_DESTINATION keep the main status
+        IN_PROGRESS and only record times. Only the action listed in allowedActions is accepted, anything else is 409. The same key with
+        the same action returns the current trip (201); the same key with a different action is 409.
+        A cancelled, completed or re-assigned trip rejects further actions. Only actions committed by the server count as facts;
+        offline / delayed submission is a phase-3 protocol.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ProgressEventRequest' } } } }
+      responses:
+        '201': { description: Action committed (also returned for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverTripDetailView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/driver/v1/me/trips/{tripId}/locations:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Driver Trips]
+      operationId: createDriverTripLocations
+      summary: D08 Report the live location of the driver's own trip (permission driver-trips:write)
+      description: >-
+        Accepted only while the trip is shared: the driver has started en route and the trip has not ended, otherwise 409.
+        coordinateSystem must be GCJ02; convert device coordinates before sending. 1 to 50 points per request.
+        Only the point with the largest seq is kept as the latest location; points whose seq is not larger than the stored one are
+        ignored and the request still answers 200, so retries and offline resends are safe. A new location is pushed (about once every
+        3 seconds per trip) to customers and staff watching the trip.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TripLocationUploadRequest' } } } }
+      responses:
+        '200': { description: Accepted, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/TripLocationUploadView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/driver/v1/logins:
+    post:
+      tags: [Driver Authentication]
+      operationId: createDriverLogin
+      summary: Driver login with the LMS local identity service (anonymous)
+      description: >-
+        Signs the driver in with the credentials stored on the driver record owned by Dispatch; Keycloak is not involved. The principal
+        type is fixed to DRIVER by this entry and the body cannot choose it. Unknown or duplicated phone number, wrong password, no password set
+        all answer the same 401 / 40100 and no token is issued; a record without a password can never
+        log in. A driver that is not ACTIVE cannot log in or refresh. After 5 consecutive failures for one phone number within 15 minutes the entry answers 429 / 42900 with
+        Retry-After. 503 / 50300 when the signing key is not configured or Dispatch cannot be reached (never a fallback login).
+        There is no registration, activation or password-reset endpoint in this phase. Responses are never cached (Cache-Control no-store).
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AppLoginRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/AppSession' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/driver/v1/token-refreshes:
+    post:
+      tags: [Driver Authentication]
+      operationId: createDriverTokenRefresh
+      summary: Exchange a driver refresh token for a new access token and refresh token (anonymous)
+      description: >-
+        The refresh token travels in the JSON body (no cookie). It is single-use: every success returns a new refresh token that
+        keeps the original 7-day absolute expiry (rotation never extends it). A DRIVER refresh token is rejected here only when it
+        belongs to the other identity; presenting an already-used refresh token answers 401 / 40100 and revokes the whole refresh
+        chain. The owning service (Dispatch) confirms the record is still eligible before rotation.
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AppRefreshRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/AppSession' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/driver/v1/logouts:
+    post:
+      tags: [Driver Authentication]
+      operationId: createDriverLogout
+      summary: Log out by revoking the refresh chain of the submitted refresh token (anonymous)
+      description: >-
+        Idempotent: an unknown, other-identity or already revoked refresh token also answers 204. Access tokens already issued stay
+        valid until they expire (at most 15 minutes); there is no immediate access-token revocation in this phase.
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AppLogoutRequest' } } } }
+      responses:
+        '204': { description: Logged out; no body. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/dispatch/driver/v1/me/inspection-templates:
+    get:
+      tags: [Driver Inspections]
+      operationId: listInspectionTemplates
+      summary: D2-01 Current PRE_TRIP / POST_TRIP inspection templates (permission driver-inspections:read)
+      description: >-
+        Items are identified by stable codes; display names may change without affecting stored records. Published template versions are frozen into
+        every submitted inspection. Cacheable for a few minutes (private).
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/InspectionTemplateView' } } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/driver/v1/me/inspections:
+    post:
+      tags: [Driver Inspections]
+      operationId: createDriverInspection
+      summary: D2-02 Submit a complete inspection (permission driver-inspections:write)
+      description: >-
+        Requires Idempotency-Key (same key and content replays the same record, still 201). Every template item must appear exactly once - missing,
+        duplicate or unknown items answer 400. FAIL is a valid result and is stored as is; a failed item does NOT limit offers or change the working
+        status (Q2-01 baseline: record the fact first). Submitted records are immutable. An inactive or suspended driver answers 422. Driver, property,
+        vehicle snapshot and submittedAt are taken by the server.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SubmitInspectionRequest' } } } }
+      responses:
+        '201': { description: Created (also for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverInspectionView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    get:
+      tags: [Driver Inspections]
+      operationId: listDriverInspections
+      summary: D2-03 Own inspections, newest first (permission driver-inspections:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - { name: sort, in: query, required: false, description: 'Allowed: submittedAt, phase, inspectionId. Default -submittedAt,inspectionId.', schema: { type: string } }
+        - { name: phase, in: query, required: false, schema: { type: string, enum: [PRE_TRIP, POST_TRIP] } }
+        - { name: hasFailure, in: query, required: false, schema: { type: boolean } }
+        - { name: from, in: query, required: false, description: 'Inclusive submittedAt lower bound (ISO 8601 UTC, Z).', schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, description: 'Exclusive submittedAt upper bound; must be later than from.', schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/DriverInspectionView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/driver/v1/me/inspections/{inspectionId}:
+    parameters:
+      - { name: inspectionId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Driver Inspections]
+      operationId: getDriverInspection
+      summary: D2-04 Own inspection detail (permission driver-inspections:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverInspectionView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/driver/v1/me/vehicle-issues:
+    post:
+      tags: [Driver Reports]
+      operationId: createVehicleIssue
+      summary: D2-05 Report a vehicle issue (permission driver-reports:write)
+      description: >-
+        Requires Idempotency-Key (same key and content replays the same record, still 201). Only registers the report and answers status RECORDED - it
+        does not mean accepted or repaired, and never changes the driver or cancels a trip. Optional inspectionId must be one of the caller's own
+        inspections (400 otherwise); a failed inspection does not create an issue by itself. Description is required, at most 2000 characters.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateVehicleIssueRequest' } } } }
+      responses:
+        '201': { description: Created (also for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/VehicleIssueView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    get:
+      tags: [Driver Reports]
+      operationId: listVehicleIssues
+      summary: D2-06 Own vehicle issue reports, newest first (permission driver-reports:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - { name: sort, in: query, required: false, description: 'Allowed: reportedAt, issueId. Default -reportedAt,issueId.', schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [RECORDED, FORWARDED, ACKNOWLEDGED] } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/VehicleIssueView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/driver/v1/me/vehicle-issues/{issueId}:
+    parameters:
+      - { name: issueId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Driver Reports]
+      operationId: getVehicleIssue
+      summary: D2-07 Own vehicle issue detail with its real handling status (permission driver-reports:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/VehicleIssueView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/driver/v1/me/preferences:
+    get:
+      tags: [Driver Preferences]
+      operationId: getDriverPreferences
+      summary: D2-08 Own preferences (permission driver-preferences:read)
+      description: Never-saved drivers read the contract default (language EN, version 0) - nothing is written. Not cacheable.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverPreferencesView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    patch:
+      tags: [Driver Preferences]
+      operationId: updateDriverPreferences
+      summary: D2-09 Change own preferences (permission driver-preferences:write)
+      description: >-
+        Only the declared field (language) is accepted. Optional X-Expected-Version: when present it must equal the current version (0 when never saved), otherwise
+        409. The first save needs no version. Repeating the stored value writes nothing. The driver master record languages (languages spoken) is never touched.
+      parameters:
+        - { name: X-Expected-Version, in: header, required: false, schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateDriverPreferencesRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverPreferencesView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/driver/v1/me/operations-contacts:
+    get:
+      tags: [Driver Incidents]
+      operationId: getDriverOperationsContacts
+      summary: D2-10 Operations contacts of the driver's property (permission driver-reports:read)
+      description: >-
+        Contacts come only from deployment configuration (OperationsContacts). A property without trusted contacts answers isAvailable=false and an empty list -
+        never the driver's personal emergency contact and never a demo number. Having the contact data does not mean a call connected or operations accepted anything.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/OperationsContactsView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/driver/v1/me/incidents:
+    post:
+      tags: [Driver Incidents]
+      operationId: createDriverIncident
+      summary: D2-11 Report an incident (permission driver-reports:write)
+      description: >-
+        Requires Idempotency-Key (same key and content replays the same record, still 201). occurredAt is the driver's stated time (UTC, not in the future);
+        reportedAt is generated by the server. Status is RECORDED: saved here only. FORWARDED (handed to an operations channel) and ACKNOWLEDGED (operations signed
+        for it) are separate facts that need a real operations integration, which does not exist yet. Any driver status may report. Optional tripId must be one of
+        the caller's own trips (completed or cancelled included); otherwise 400. No GPS or attachment is required.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateIncidentRequest' } } } }
+      responses:
+        '201': { description: Created (also for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverIncidentView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    get:
+      tags: [Driver Incidents]
+      operationId: listDriverIncidents
+      summary: D2-12 Own incident reports, newest first (permission driver-reports:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - { name: sort, in: query, required: false, description: 'Allowed: reportedAt, occurredAt, incidentId. Default -reportedAt,incidentId.', schema: { type: string } }
+        - { name: type, in: query, required: false, schema: { type: string, enum: [VEHICLE_BREAKDOWN, TRAFFIC_ACCIDENT, PASSENGER_ASSISTANCE, OTHER] } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [RECORDED, FORWARDED, ACKNOWLEDGED] } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/DriverIncidentView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/driver/v1/me/incidents/{incidentId}:
+    parameters:
+      - { name: incidentId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Driver Incidents]
+      operationId: getDriverIncident
+      summary: D2-13 Own incident detail with its real handling status (permission driver-reports:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverIncidentView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT, description: 'Staff access token issued by Keycloak (POST /api/v1/login).' }
+    lmsAppBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'Driver / customer access token issued by the LMS local identity service (RS256, audience lms-app-api).' }
+  headers:
+    TraceId: { description: 'Correlation id, identical to the body traceId.', schema: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 } }
+  parameters:
+    Page: { name: page, in: query, required: false, description: 'Page number, >= 1. Default 1.', schema: { type: integer, minimum: 1, default: 1 } }
+    PageSize: { name: pageSize, in: query, required: false, description: 'Page size. Default 10.', schema: { type: integer, enum: [10, 20, 50], default: 10 } }
+    Search: { name: search, in: query, required: false, description: 'Case-insensitive contains match on the visible columns; blank means no filter.', schema: { type: string } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, description: 'Non-blank key; the same key with different content answers 409 / 40900.', schema: { type: string } }
+  responses:
+    BadRequest:
+      description: 'Malformed request (40000) or validation failed (40001).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Unauthorized:
+      description: 'Not authenticated (40100) or token expired (40101).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Forbidden:
+      description: 'Insufficient permission (40300): the LMS local token belongs to another identity (for example a customer), or its subject no longer maps to a driver record.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    NotFound:
+      description: 'Resource not found (40400), or not owned by / visible to the caller.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Conflict:
+      description: 'State conflict (40900): version mismatch, an action that is not the next allowed one, a closed offer, a trip that can no longer be assigned, or an idempotency key reused with different content.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    UnprocessableEntity:
+      description: 'Business rule rejected (42200): the driver is not eligible (inactive / suspended / not AVAILABLE / on a trip); errors[] names the failing field.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    TooManyRequests:
+      description: 'Too many consecutive failed logins for this phone number (42900). Wait Retry-After seconds.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' }, Retry-After: { description: 'Seconds to wait.', schema: { type: integer } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    InternalError:
+      description: 'Internal server error (50000).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    ServiceUnavailable:
+      description: 'Service unavailable (50300): the authorization source (Platform) or a dependent service (Booking) cannot give a real answer.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  schemas:
+    AppLoginRequest:
+      type: object
+      required: [phone, password]
+      additionalProperties: false
+      description: Phone + password for the driver entry. role, principalType, driverId, guestId, identityProvider and the former loginId are not accepted.
+      properties:
+        phone: { type: string, description: 'Full phone number with country / region code. Spaces, hyphens and parentheses are ignored; must equal drivers.phone after the same normalisation.', example: '+85361234567' }
+        password: { type: string, format: password, description: 'Plain text, used only for this check; never stored or logged and not trimmed.' }
+    AppRefreshRequest:
+      type: object
+      required: [refreshToken]
+      additionalProperties: false
+      properties:
+        refreshToken: { type: string, description: 'Refresh token returned by login or the previous refresh.' }
+    AppLogoutRequest:
+      type: object
+      required: [refreshToken]
+      additionalProperties: false
+      properties:
+        refreshToken: { type: string, description: 'Refresh token whose refresh chain is revoked.' }
+    AppSession:
+      type: object
+      required: [accessToken, tokenType, expiresIn, refreshToken, refreshExpiresIn, principalType]
+      description: Tokens signed by the LMS local identity service (RS256). Send accessToken as Authorization Bearer.
+      properties:
+        accessToken: { type: string, description: 'JWT, 15 minutes by default. Claims: sub (driver id), principalType, roles, scope, sid, jti, iss, aud (lms-app-api).' }
+        tokenType: { type: string, enum: [Bearer] }
+        expiresIn: { type: integer, example: 900, description: 'Access token lifetime in seconds.' }
+        refreshToken: { type: string, description: 'Opaque, single-use.' }
+        refreshExpiresIn: { type: integer, example: 604800, description: 'Remaining refresh lifetime in seconds (7-day absolute, not extended by rotation).' }
+        principalType: { type: string, enum: [DRIVER] }
+    SuccessEnvelope:
+      type: object
+      required: [code, message, traceId]
+      properties:
+        code: { type: integer, example: 20000 }
+        message: { type: string, example: success }
+        data: { nullable: true }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+        traceId: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+    PageMeta:
+      type: object
+      required: [traceId]
+      properties:
+        traceId: { type: string }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    Pagination:
+      type: object
+      required: [currentPage, pageSize, totalItems, totalPages]
+      properties:
+        currentPage: { type: integer, example: 1 }
+        pageSize: { type: integer, example: 10 }
+        totalItems: { type: integer, example: 42 }
+        totalPages: { type: integer, example: 5 }
+    ErrorEnvelope:
+      type: object
+      required: [code, message, errors, traceId]
+      properties:
+        code: { type: integer, example: 42200 }
+        message: { type: string, example: Business rule rejected }
+        errors: { type: array, items: { type: object, required: [field, message], properties: { field: { type: string }, message: { type: string } } } }
+        traceId: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+    DriverAvailability: { type: string, enum: [AVAILABLE, ON_TRIP, OFF_DUTY, BREAK] }
+    TripStatus: { type: string, enum: [PENDING, CONFIRMED, DRIVER_ASSIGNED, DRIVER_EN_ROUTE, ARRIVED_AT_PICKUP, IN_PROGRESS, COMPLETED, CANCELLED] }
+    TripStage: { type: string, enum: [PENDING, CONFIRMED, DRIVER_ASSIGNED, DRIVER_EN_ROUTE, ARRIVED_AT_PICKUP, PASSENGER_ON_BOARD, IN_TRANSIT, ARRIVED_AT_DESTINATION, COMPLETED, CANCELLED] }
+    DriverProgressAction: { type: string, enum: [START_EN_ROUTE, ARRIVE_AT_PICKUP, PICK_UP_PASSENGER, START_TRANSIT, ARRIVE_AT_DESTINATION, COMPLETE_TRIP] }
+    DriverSelfView:
+      type: object
+      required: [driverId, name, propertyId, assignedVehicle, languages, status, capabilities, version]
+      properties:
+        driverId: { type: string }
+        name: { type: string }
+        propertyId: { type: string }
+        assignedVehicle: { type: string }
+        languages: { type: array, items: { type: string } }
+        status: { type: string, enum: [ACTIVE, INACTIVE, SUSPENDED], description: 'Master-record status, separate from the working status.' }
+        availability: { allOf: [ { $ref: '#/components/schemas/DriverAvailability' } ], description: 'Omitted until the driver has reported or been driven to a status.' }
+        availabilitySource: { type: string, enum: [DRIVER_SELF_REPORT, TRIP_ASSIGNMENT, TRIP_RECONCILIATION] }
+        syncedAt: { type: string, format: date-time }
+        capabilities: { type: object, required: [canChangeAvailability, canAcceptOffers], properties: { canChangeAvailability: { type: boolean }, canAcceptOffers: { type: boolean } } }
+        version: { type: integer, format: int64 }
+    ChangeAvailabilityRequest:
+      type: object
+      required: [availability]
+      additionalProperties: false
+      properties:
+        availability: { type: string, enum: [AVAILABLE, BREAK, OFF_DUTY] }
+    OfferResponseRequest:
+      type: object
+      required: [decision]
+      additionalProperties: false
+      properties:
+        decision: { type: string, enum: [ACCEPT, DECLINE] }
+    DriverOfferView:
+      type: object
+      required: [offerId, tripId, tripReference, status, expiresAt, createdAt, serverTime, trip, version]
+      properties:
+        offerId: { type: string, description: 'Unique per offer round; never reused as the trip id.' }
+        tripId: { type: string }
+        tripReference: { type: string }
+        status: { type: string, enum: [PENDING, ACCEPTING, ACCEPTED, DECLINED, EXPIRED, SUPERSEDED] }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        respondedAt: { type: string, format: date-time }
+        serverTime: { type: string, format: date-time, description: 'Server time of this response, to calibrate the countdown.' }
+        trip: { type: object, required: [pickupAt, pickupName, dropoffName, passengers, vehicleClass], properties: { pickupAt: { type: string, format: date-time }, pickupName: { type: string }, dropoffName: { type: string }, passengers: { type: integer }, vehicleClass: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH] } } }
+        version: { type: integer, format: int64 }
+    TripRoute:
+      type: object
+      required: [pickupLocationId, pickupName, dropoffLocationId, dropoffName, isCrossBorder]
+      properties: { pickupLocationId: { type: string }, pickupName: { type: string }, dropoffLocationId: { type: string }, dropoffName: { type: string }, isCrossBorder: { type: boolean } }
+    DriverTripSummaryView:
+      type: object
+      required: [tripId, tripReference, serviceType, status, stage, vehicleClass, passengers, route, pickupAt, version]
+      properties:
+        tripId: { type: string }
+        tripReference: { type: string }
+        serviceType: { type: string, enum: [ONE_WAY, AIRPORT_PICKUP, AIRPORT_DROPOFF, INTER_PROPERTY] }
+        status: { $ref: '#/components/schemas/TripStatus' }
+        stage: { $ref: '#/components/schemas/TripStage' }
+        vehicleClass: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH] }
+        passengers: { type: integer }
+        route: { $ref: '#/components/schemas/TripRoute' }
+        pickupAt: { type: string, format: date-time, description: 'Planned pickup time (UTC).' }
+        acceptedAt: { type: string, format: date-time, description: 'Omitted when the event has not happened; never back-filled from pickupAt.' }
+        pickedUpAt: { type: string, format: date-time }
+        droppedOffAt: { type: string, format: date-time, description: 'Arrival at the destination.' }
+        completedAt: { type: string, format: date-time }
+        closedAt: { type: string, format: date-time, description: 'Entered a terminal state (completed or cancelled).' }
+        version: { type: integer, format: int64 }
+    DriverTripDetailView:
+      type: object
+      required: [tripId, tripReference, serviceType, status, stage, vehicleClass, passengers, route, pickupAt, passenger, assignment, fulfillment, events, allowedActions, contact, version]
+      properties:
+        tripId: { type: string }
+        tripReference: { type: string }
+        serviceType: { type: string, enum: [ONE_WAY, AIRPORT_PICKUP, AIRPORT_DROPOFF, INTER_PROPERTY] }
+        status: { $ref: '#/components/schemas/TripStatus' }
+        stage: { $ref: '#/components/schemas/TripStage' }
+        vehicleClass: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH] }
+        passengers: { type: integer }
+        route: { $ref: '#/components/schemas/TripRoute' }
+        pickupAt: { type: string, format: date-time }
+        closedAt: { type: string, format: date-time }
+        passenger: { type: object, required: [name], properties: { name: { type: string }, phoneMasked: { type: string, example: '+853 6***4829' } } }
+        specialRequests: { type: string }
+        assignment: { type: object, required: [offerId, vehicleLabel], properties: { offerId: { type: string }, vehicleLabel: { type: string } } }
+        fulfillment: { type: object, properties: { acceptedAt: { type: string, format: date-time }, enRouteAt: { type: string, format: date-time }, arrivedAtPickupAt: { type: string, format: date-time }, pickedUpAt: { type: string, format: date-time }, inTransitAt: { type: string, format: date-time }, arrivedAtDestinationAt: { type: string, format: date-time }, completedAt: { type: string, format: date-time } } }
+        events: { type: array, items: { type: object, required: [eventId, type, status, occurredAt], properties: { eventId: { type: string }, type: { type: string, enum: [DRIVER_ASSIGNED, STARTED_EN_ROUTE, ARRIVED_AT_PICKUP, PASSENGER_BOARDED, IN_TRANSIT, ARRIVED_AT_DESTINATION, COMPLETED, CANCELLED] }, status: { $ref: '#/components/schemas/TripStatus' }, occurredAt: { type: string, format: date-time } } } }
+        allowedActions: { type: array, items: { $ref: '#/components/schemas/DriverProgressAction' }, description: 'Server-decided; empty for terminal trips.' }
+        contact: { type: object, required: [canContactPassenger], properties: { canContactPassenger: { type: boolean, description: 'False until a real, authorised contact channel exists (Q07).' } } }
+        cancellation: { type: object, required: [reasonCode, cancelledAt], properties: { reasonCode: { type: string }, cancelledAt: { type: string, format: date-time } } }
+        version: { type: integer, format: int64 }
+    ProgressEventRequest:
+      type: object
+      required: [action]
+      additionalProperties: false
+      properties:
+        action: { $ref: '#/components/schemas/DriverProgressAction' }
+    TripLocationUploadRequest:
+      type: object
+      required: [coordinateSystem, points]
+      additionalProperties: false
+      properties:
+        coordinateSystem: { type: string, enum: [GCJ02] }
+        points:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: object
+            required: [seq, latitude, longitude, recordedAt]
+            properties:
+              seq: { type: integer, format: int64, minimum: 1, description: Monotonically increasing within the trip; used to drop duplicates and stale points. }
+              latitude: { type: number, format: double, minimum: -90, maximum: 90 }
+              longitude: { type: number, format: double, minimum: -180, maximum: 180 }
+              accuracyMeters: { type: number, format: double, minimum: 0, nullable: true }
+              headingDegrees: { type: number, format: double, minimum: 0, maximum: 360, nullable: true }
+              speedKmh: { type: number, format: double, minimum: 0, nullable: true }
+              recordedAt: { type: string, format: date-time, description: 'Device fix time, ISO 8601 UTC; at most 1 minute later than the server time.' }
+    TripLocationUploadView:
+      type: object
+      required: [acceptedSeq]
+      properties:
+        acceptedSeq: { type: integer, format: int64, description: Largest seq stored by the server. }
+    InspectionItemView:
+      type: object
+      required: [code, name]
+      properties: { code: { type: string, example: TYRES_WHEELS }, name: { type: string, example: Tyres & Wheel Condition } }
+    InspectionTemplateView:
+      type: object
+      required: [phase, version, items]
+      properties:
+        phase: { type: string, enum: [PRE_TRIP, POST_TRIP] }
+        version: { type: integer }
+        items: { type: array, items: { $ref: '#/components/schemas/InspectionItemView' } }
+    SubmitInspectionRequest:
+      type: object
+      required: [phase, answers]
+      additionalProperties: false
+      properties:
+        phase: { type: string, enum: [PRE_TRIP, POST_TRIP] }
+        templateVersion: { type: integer, description: 'Omit for the currently published version.' }
+        answers: { type: array, items: { type: object, required: [itemCode, result], additionalProperties: false, properties: { itemCode: { type: string }, result: { type: string, enum: [PASS, FAIL] } } } }
+    DriverInspectionView:
+      type: object
+      required: [inspectionId, phase, templateVersion, propertyId, vehicleSnapshot, answers, hasFailure, submittedAt, version]
+      properties:
+        inspectionId: { type: string }
+        phase: { type: string, enum: [PRE_TRIP, POST_TRIP] }
+        templateVersion: { type: integer }
+        propertyId: { type: string }
+        vehicleSnapshot: { type: string, description: 'Assigned vehicle text at submit time (there is no vehicle master record yet).' }
+        answers: { type: array, items: { type: object, required: [itemCode, result], properties: { itemCode: { type: string }, result: { type: string, enum: [PASS, FAIL] } } } }
+        hasFailure: { type: boolean }
+        submittedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64 }
+    CreateVehicleIssueRequest:
+      type: object
+      required: [description]
+      additionalProperties: false
+      properties:
+        description: { type: string, maxLength: 2000 }
+        inspectionId: { type: string, description: 'Optional own inspection to link; linking never turns a failed inspection into an issue by itself.' }
+    VehicleIssueView:
+      type: object
+      required: [issueId, propertyId, vehicleSnapshot, description, status, reportedAt, version]
+      properties:
+        issueId: { type: string }
+        propertyId: { type: string }
+        vehicleSnapshot: { type: string }
+        description: { type: string }
+        inspectionId: { type: string }
+        status: { type: string, enum: [RECORDED, FORWARDED, ACKNOWLEDGED], description: 'Only RECORDED occurs until an operations / maintenance integration exists.' }
+        reportedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64 }
+    DriverPreferencesView:
+      type: object
+      required: [language, version]
+      properties:
+        language: { type: string, enum: [EN, ZH_HANT, ZH_HANS], description: 'Interface language; unrelated to the master-record languages the driver speaks.' }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64, description: '0 when never saved.' }
+    UpdateDriverPreferencesRequest:
+      type: object
+      required: [language]
+      additionalProperties: false
+      properties:
+        language: { type: string, enum: [EN, ZH_HANT, ZH_HANS] }
+    OperationsContactsView:
+      type: object
+      required: [propertyId, isAvailable, contacts]
+      properties:
+        propertyId: { type: string }
+        isAvailable: { type: boolean }
+        contacts: { type: array, items: { type: object, required: [name, channel, value], properties: { name: { type: string }, channel: { type: string, example: PHONE }, value: { type: string } } } }
+    CreateIncidentRequest:
+      type: object
+      required: [type, occurredAt, description]
+      additionalProperties: false
+      properties:
+        type: { type: string, enum: [VEHICLE_BREAKDOWN, TRAFFIC_ACCIDENT, PASSENGER_ASSISTANCE, OTHER] }
+        occurredAt: { type: string, format: date-time, description: 'ISO 8601 UTC ending with Z; not later than server time (5 minutes of clock tolerance).' }
+        description: { type: string, maxLength: 2000 }
+        tripId: { type: string, description: 'Optional; must be one of the caller''s own trips.' }
+    DriverIncidentView:
+      type: object
+      required: [incidentId, propertyId, vehicleSnapshot, type, occurredAt, description, status, reportedAt, version]
+      properties:
+        incidentId: { type: string }
+        propertyId: { type: string }
+        vehicleSnapshot: { type: string }
+        type: { type: string, enum: [VEHICLE_BREAKDOWN, TRAFFIC_ACCIDENT, PASSENGER_ASSISTANCE, OTHER] }
+        occurredAt: { type: string, format: date-time }
+        description: { type: string }
+        tripId: { type: string }
+        status: { type: string, enum: [RECORDED, FORWARDED, ACKNOWLEDGED], description: 'RECORDED = saved here only; FORWARDED / ACKNOWLEDGED need a real operations integration and do not occur yet.' }
+        reportedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64 }

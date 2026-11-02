@@ -1,0 +1,20 @@
+{
+  "pages": [
+    { "path": "pages/login/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "Sign in" } },
+    { "path": "pages/register/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "Create account" } },
+    { "path": "pages/home/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "Home" } },
+    { "path": "pages/service-info/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "Service" } },
+    { "path": "pages/plan-ride/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "Plan Your Ride" } },
+    { "path": "pages/booking-confirmation/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "Booking Confirmation" } },
+    { "path": "pages/bookings/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "Bookings" } },
+    { "path": "pages/order-details/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "Trip Details" } },
+    { "path": "pages/driver-map/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "Driver Map" } },
+    { "path": "pages/account/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "Account" } }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "LMS Client",
+    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundColor": "#f8f8fa"
+  }
+}

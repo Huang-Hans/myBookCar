@@ -1,0 +1,1220 @@
+# Delivery contract snapshot. Runtime query/header metadata is generated from the actual request contracts.
+# Refresh published parameter metadata from generated OpenAPI; do not maintain a separate parameter provider.
+openapi: 3.0.3
+info:
+  title: LMS Portal Management API (S1 + S2)
+  version: 1.0.0
+  description: >-
+    Business operations of Portal stages S1 (read-only configuration, CF03-CF12, CF14-CF21) and
+    S2 (identity-backed master data and audit, US01-US04, CF01-CF02, CF22, DR01-DR04, LC01-LC05,
+    BL01-BL04, AU01). Paths, DTOs and codes follow docs/design/LMS-spec-20261008-05-api-contract.md; application codes
+    are registered in docs/api/error-codes.md. Every response, success or failure, uses the unified
+    envelope and carries traceId (body and X-Trace-Id header). Business routes require a Bearer token
+    from the corporate identity provider; the caller's role, permissions and property scope come from
+    the persisted portal user, never from request headers. While Identity:Authority is not configured
+    every operation answers 401 / 40100.
+    Configuration operations (CF) answer 503 / 50300 when the approved configuration body is not
+    available (no environment configured, no active release, no body for the area, or an unreadable
+    body); they never return demonstration data. A repeated POST with the same Idempotency-Key and
+    identical content answers 201 with the resource's current state (contract question Q09 is open:
+    it is not a byte-for-byte replay of the first response). Null ordering of nullable sort columns
+    follows MongoDB's default and is not normalised to "last" for database-backed lists.
+servers:
+  - url: http://localhost:5088
+    description: API gateway (Development)
+tags:
+  - name: Users
+  - name: Drivers
+  - name: Locations
+  - name: CustomerBlacklists
+  - name: AuditRecords
+  - name: Configuration
+security:
+  - bearerAuth: []
+paths:
+  /api/platform/staff/v1/users:
+    get:
+      tags: [Users]
+      operationId: listUsers
+      summary: US01 List portal users (permission users:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Comma separated; leading - is descending. Allowed: name, corporateEmail, roleCode, propertyId, identityProvider, isActive, userId. Default name,userId.', schema: { type: string } }
+        - { name: propertyId, in: query, required: false, description: 'Explicit property filter; outside the caller scope answers 403.', schema: { type: string } }
+        - { name: isActive, in: query, required: false, schema: { type: boolean } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/PortalUserView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [Users]
+      operationId: createUser
+      summary: US03 Create a portal user (permission users:write)
+      description: Registers local authorization only; no identity-provider account is created and subjectId stays unset (the user cannot sign in until linked).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatePortalUserRequest' } } } }
+      responses:
+        '201': { description: Created (also returned for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/PortalUserView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/users/{userId}:
+    parameters:
+      - { name: userId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Users]
+      operationId: getUser
+      summary: US02 Read a portal user (permission users:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/PortalUserView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    patch:
+      tags: [Users]
+      operationId: updateUser
+      summary: US04 Edit or deactivate a portal user (permission users:write)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PatchPortalUserRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/PortalUserView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/staff/v1/drivers:
+    get:
+      tags: [Drivers]
+      operationId: listDrivers
+      summary: DR01 List drivers (permission drivers:read; served by Dispatch)
+      # 交付快照；运行时参数文档由 DriverListRequest 和 PagedQueryRequest 生成。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: '可用字段：name、driverId、licenseNumber、phone、propertyId、assignedVehicle、availability、status。默认排序为 name,driverId。', schema: { type: string, nullable: true, default: 'name,driverId' } }
+        - { name: propertyId, in: query, required: false, description: '按物业筛选；传入时不能为空白。', schema: { type: string, nullable: true } }
+        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/DriverStatus' } }
+        - { name: view, in: query, required: false, description: '页面标签筛选，与其他条件取交集；默认 ALL，BLACKLIST 包含停用与暂停的司机。', schema: { type: string, enum: [ALL, AVAILABLE, ON_TRIP, BLACKLIST], default: ALL } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/DriverView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    post:
+      tags: [Drivers]
+      operationId: createDriver
+      summary: DR03 Create a driver (permission drivers:write)
+      description: availability, availabilitySource and syncedAt are read-only and stay unset until a trusted synchronisation source exists.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateDriverRequest' } } } }
+      responses:
+        '201': { description: Created (also returned for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/staff/v1/drivers/{driverId}:
+    parameters:
+      - { name: driverId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Drivers]
+      operationId: getDriver
+      summary: DR02 Read a driver (permission drivers:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    patch:
+      tags: [Drivers]
+      operationId: updateDriver
+      summary: DR04 Edit or deactivate a driver (permission drivers:write)
+      description: Only status=INACTIVE expresses deactivation; it records a restriction dated on the business day (Asia/Macau by default) and keeps the record.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PatchDriverRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DriverView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    delete:
+      tags: [Drivers]
+      operationId: removeDriver
+      summary: DR05 Delete a driver (permission drivers:write)
+      description: Soft-deletes the driver and disables login, retaining historical shifts and audit records. Drivers on a trip cannot be deleted. Missing or out-of-scope drivers return 404. No request body.
+      responses:
+        '200': { description: Removed, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: object, nullable: true, example: null } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/locations:
+    get:
+      tags: [Locations]
+      operationId: listLocations
+      summary: LC01 List common locations (permission locations:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: name, region, categoryCode, address, coordinates.latitude, coordinates.longitude, contactPerson, contactPhone, operatingHours, geofence.isEnabled, isActive, sortOrder, locationId. Default region,sortOrder,locationId.', schema: { type: string } }
+        - { name: isActive, in: query, required: false, schema: { type: boolean } }
+        - { name: region, in: query, required: false, schema: { $ref: '#/components/schemas/LocationRegion' } }
+        - { name: categoryCode, in: query, required: false, description: 'Exact category code from the uploaded location categories (e.g. LC-001). A different dimension from region; neither replaces the other.', schema: { type: string } }
+        - { name: locationIds, in: query, required: false, description: 'Comma-separated location ids (the first 100 are used, at most 2000 characters). Restricts the page to those locations, so favourites and recents can be resolved to names and active state without paging the whole catalog.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/LocationView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [Locations]
+      operationId: createLocation
+      summary: LC03 Create a common location (permission locations:write)
+      description: The location is appended to the end of its region. categoryCode must be an uploaded category code.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateLocationRequest' } } } }
+      responses:
+        '201': { description: Created (also returned for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/LocationView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/locations/{locationId}:
+    parameters:
+      - { name: locationId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Locations]
+      operationId: getLocation
+      summary: LC02 Read a common location (permission locations:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/LocationView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    patch:
+      tags: [Locations]
+      operationId: updateLocation
+      summary: LC04 Edit or deactivate a common location (permission locations:write)
+      description: Changing the region moves the location to the end of the new region.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PatchLocationRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/LocationView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/location-orderings/{region}:
+    put:
+      tags: [Locations]
+      operationId: replaceLocationOrdering
+      summary: LC05 Replace the location order of one region (permission locations:write)
+      description: >-
+        items must contain every location of the region exactly once, each exactly once; list order is the new display order.
+        A member set that differs from the stored region answers 400 / 40001.
+      parameters:
+        - { name: region, in: path, required: true, schema: { $ref: '#/components/schemas/LocationRegion' } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LocationOrderingRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/LocationOrderingView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/platform/staff/v1/customer-blacklists:
+    get:
+      tags: [CustomerBlacklists]
+      operationId: listCustomerBlacklists
+      summary: BL01 List customer restrictions (permission blacklists:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: customerName, memberId, reason, effectiveDate, expiryDate, isActive, blacklistId. Default customerName,blacklistId.', schema: { type: string } }
+        - { name: isActive, in: query, required: false, description: 'Record status, not date validity.', schema: { type: boolean } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/CustomerBlacklistView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [CustomerBlacklists]
+      operationId: createCustomerBlacklist
+      summary: BL03 Create a customer restriction (permission blacklists:write)
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateCustomerBlacklistRequest' } } } }
+      responses:
+        '201': { description: Created (also returned for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerBlacklistView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/platform/staff/v1/customer-blacklists/{blacklistId}:
+    parameters:
+      - { name: blacklistId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [CustomerBlacklists]
+      operationId: getCustomerBlacklist
+      summary: BL02 Read a customer restriction (permission blacklists:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerBlacklistView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    patch:
+      tags: [CustomerBlacklists]
+      operationId: updateCustomerBlacklist
+      summary: BL04 Edit or deactivate a customer restriction (permission blacklists:write)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PatchCustomerBlacklistRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerBlacklistView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/platform/staff/v1/audit-records:
+    get:
+      tags: [AuditRecords]
+      operationId: listAuditRecords
+      summary: AU01 Query Platform administration audit (permission audit:read)
+      description: >-
+        Covers the audit records owned by Platform only (user, location and restriction changes); records
+        owned by other services are not included until cross-owner retrieval is decided (Q11). Callers
+        without all-property access only see records that carry their own propertyId.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: occurredAt, actor, operation, resourceType, propertyId, device, sourceIp, sessionReference, outcome, auditId. Default -occurredAt,auditId.', schema: { type: string } }
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+        - { name: from, in: query, required: false, description: 'Inclusive lower bound (ISO 8601 UTC, ends with Z).', schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, description: Exclusive upper bound; must be later than from., schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/AuditView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/platform/staff/v1/properties:
+    get:
+      tags: [Configuration]
+      operationId: listProperties
+      summary: CF01 List uploaded properties (permission configuration:read)
+      description: Limited to the caller's property scope. dailyQuota is supplied by Booking's authoritative quota and is omitted until Booking provides it.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: status, in: query, required: false, description: 'Property status; omit for all including deleted records.', schema: { type: string, enum: [Active, Inactive, Deleted] } }
+        - { name: sort, in: query, required: false, description: 'Allowed: propertyId, name, address, contactPerson, contactPhone, assignedFleetCount, operatingHours, serviceLevel. Default propertyId.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/PropertyView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    post:
+      tags: [Configuration]
+      operationId: createProperty
+      summary: CF03 Create a property (permission properties:write)
+      description: Requires all-property access and an Idempotency-Key header.
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreatePropertyRequest' } } } }
+      responses:
+        '201': { description: Created, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/PropertyView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/platform/staff/v1/properties/{propertyId}:
+    parameters:
+      - { name: propertyId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Configuration]
+      operationId: getProperty
+      summary: CF02 Read an uploaded property (permission configuration:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/PropertyView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    patch:
+      tags: [Configuration]
+      operationId: updateProperty
+      summary: CF04 Partially update a property (permission properties:write)
+      parameters: [{ $ref: '#/components/parameters/ExpectedVersion' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PatchPropertyRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/PropertyView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    delete:
+      tags: [Configuration]
+      operationId: deleteProperty
+      summary: CF05 Logically delete a property (permission properties:write)
+      description: >-
+        Deletes only a property without business references. Platform checks portal users and attached
+        files locally; Dispatch checks drivers, vehicles, coupons, offers, inspections, incidents and legacy
+        shift property references; Booking checks guests, trips, approvals, qualification references, quotas,
+        overrides, console notifications and live locations; Reporting checks scoped schedules, exports
+        and report rows. Disabled, logically deleted and historical business records also block deletion.
+        Audit logs and configuration history do not block deletion. Returns 422/42200 with a propertyId
+        issue when referenced, and 503/50300 if a required reference service is unavailable or its response
+        cannot be validated. Otherwise marks the property deleted and inactive, retaining history.
+      parameters: [{ $ref: '#/components/parameters/ExpectedVersion' }]
+      responses:
+        '200': { description: Deleted, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: boolean, example: true } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleRejected' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/cancellation-reasons:
+    get:
+      tags: [Configuration]
+      operationId: listCancellationReasons
+      summary: CF03 List cancellation reasons with points-return policy references (permission configuration:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: reasonCode, name, pointsReturnPolicyCode, pointsReturnReference, source. Default reasonCode.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/CancellationReasonView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/cancellation-reasons/{reasonCode}:
+    parameters:
+      - { name: reasonCode, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Configuration]
+      operationId: getCancellationReason
+      summary: CF04 Read a cancellation reason (permission configuration:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CancellationReasonView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/location-categories:
+    get:
+      tags: [Configuration]
+      operationId: listLocationCategories
+      summary: CF05 List uploaded location categories (permission configuration:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: categoryCode, name, description, isActive. Default categoryCode.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/LocationCategoryView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/location-categories/{categoryCode}:
+    parameters:
+      - { name: categoryCode, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Configuration]
+      operationId: getLocationCategory
+      summary: CF06 Read a location category (permission configuration:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/LocationCategoryView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/travel-time-indices:
+    get:
+      tags: [Configuration]
+      operationId: listTravelTimeIndices
+      summary: CF07 List route category buffers (permission configuration:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: routeCategory, bufferMinutes, navigationProvider, isTrafficAwareEtaEnabled, applicationRule, routeCategoryCode. Default routeCategoryCode.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/TravelBufferView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/travel-time-indices/{routeCategoryCode}:
+    parameters:
+      - { name: routeCategoryCode, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Configuration]
+      operationId: getTravelTimeIndex
+      summary: CF08 Read a route category buffer (permission configuration:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/TravelBufferView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/notification-templates:
+    get:
+      tags: [Configuration]
+      operationId: listNotificationTemplates
+      summary: CF09 List uploaded notification templates (permission configuration:read)
+      description: Read-only; never triggers a send.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: templateId, eventType, eventTrigger, isActive. Default templateId.', schema: { type: string } }
+        - { name: isActive, in: query, required: false, schema: { type: boolean } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/NotificationTemplateView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/notification-templates/{templateId}:
+    parameters:
+      - { name: templateId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Configuration]
+      operationId: getNotificationTemplate
+      summary: CF10 Preview a notification template (permission configuration:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/NotificationTemplateView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/notification-channel-configurations:
+    get:
+      tags: [Configuration]
+      operationId: listNotificationChannelConfigurations
+      summary: CF11 List event channel configurations (permission configuration:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: eventType, eventTrigger, isActive. Default eventType.', schema: { type: string } }
+        - { name: isActive, in: query, required: false, schema: { type: boolean } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/NotificationChannelView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/loyalty-qualification-rules:
+    get:
+      tags: [Configuration]
+      operationId: getLoyaltyQualificationRules
+      summary: CF14 Read loyalty qualification source notes (permission configuration:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/LoyaltyQualificationRulesView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/self-booking-rules:
+    get:
+      tags: [Configuration]
+      operationId: getSelfBookingRules
+      summary: CF15 Read self-booking control notes (permission configuration:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/SelfBookingRulesView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/self-booking-eligibility-rules:
+    get:
+      tags: [Configuration]
+      operationId: getSelfBookingEligibilityRules
+      summary: CF16 Read self-booking eligibility notes (permission configuration:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/EligibilityRulesView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/customer-service-qualification-rules:
+    get:
+      tags: [Configuration]
+      operationId: getCustomerServiceQualificationRules
+      summary: CF17 Read customer-service qualification notes (permission configuration:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CsQualificationRulesView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/role-permission-references:
+    get:
+      tags: [Configuration]
+      operationId: listRolePermissionReferences
+      summary: CF18 Read the role permission matrix (permission configuration:read)
+      description: A read-only display reference. It does not drive authorization; actual permissions come from Authorization:RolePermissions. Not paginated.
+      parameters:
+        - { name: propertyId, in: query, required: false, description: 'Scope check only; outside the caller scope answers 403.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/RolePermissionView' } } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/system-parameters:
+    get:
+      tags: [Configuration]
+      operationId: getSystemParameters
+      summary: CF19 Read uploaded system parameters (permission configuration:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/SystemParametersView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/integration-references:
+    get:
+      tags: [Configuration]
+      operationId: listIntegrationReferences
+      summary: CF20 Read integration configuration cards (permission configuration:read)
+      description: Configuration references only; never calls a provider and never returns credentials. Not paginated.
+      parameters:
+        - { name: group, in: query, required: false, description: 'SYSTEM (default) lists the system integration cards; NAVIGATION lists Google Maps / Amap.', schema: { type: string, enum: [SYSTEM, NAVIGATION] } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/IntegrationReferenceView' } } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/integration-references/{integrationCode}:
+    parameters:
+      - { name: integrationCode, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Configuration]
+      operationId: getIntegrationReference
+      summary: CF21 Read an integration reference (permission configuration:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/IntegrationReferenceView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/configuration-register:
+    get:
+      tags: [Configuration]
+      operationId: listConfigurationRegister
+      summary: CF22 Read the configuration ownership register (permission configuration:read)
+      description: versionLabel is a display label and is not the release sequence (Q10).
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: areaName, mechanism, isEditable, owner, versionLabel, sourceLabel, areaCode. Default areaCode.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/ConfigurationRegisterView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  headers:
+    TraceId: { description: 'Correlation id, identical to the body traceId.', schema: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 } }
+  parameters:
+    Page: { name: page, in: query, required: false, description: 'Page number, >= 1. Default 1.', schema: { type: integer, minimum: 1, default: 1 } }
+    PageSize: { name: pageSize, in: query, required: false, description: 'Page size. Default 10.', schema: { type: integer, enum: [10, 20, 50], default: 10 } }
+    Search: { name: search, in: query, required: false, description: 'Case-insensitive contains match on the visible columns; blank means no filter.', schema: { type: string } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, description: 'Non-blank key; the same key with different content answers 409 / 40900.', schema: { type: string } }
+    ExpectedVersion: { name: X-Expected-Version, in: header, required: true, description: 'Current resource version for optimistic concurrency.', schema: { type: integer, format: int64, minimum: 1 } }
+  responses:
+    BadRequest:
+      description: 'Malformed request (40000: bad JSON, missing/invalid Idempotency-Key, unexpected body) or validation failed (40001: unknown field or query parameter, invalid value, merged resource violates a field rule).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Unauthorized:
+      description: 'Not authenticated (40100) or token expired (40101).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Forbidden:
+      description: 'Insufficient permission (40300): missing permission, token subject not linked to an active portal user, explicit property outside the caller scope, or a grant beyond the caller scope.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    NotFound:
+      description: 'Resource not found (40400), or not visible to the caller.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Conflict:
+      description: 'State conflict (40900): duplicate unique value, or idempotency key reused with different content.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    BusinessRuleRejected:
+      description: 'Business rule rejected (42200): the property has business references and cannot be deleted. The propertyId issue explains the restriction.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    InternalError:
+      description: 'Internal server error (50000).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    ServiceUnavailable:
+      description: 'Service unavailable (50300): the approved configuration body, the uploaded property list, the authorization source, or a required property reference service is not available.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [code, message, traceId]
+      properties:
+        code: { type: integer, example: 20000 }
+        message: { type: string, example: success }
+        data: { nullable: true }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+        traceId: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+    PageMeta:
+      type: object
+      required: [traceId]
+      properties:
+        traceId: { type: string }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    Pagination:
+      type: object
+      required: [currentPage, pageSize, totalItems, totalPages]
+      properties:
+        currentPage: { type: integer, example: 1 }
+        pageSize: { type: integer, example: 10 }
+        totalItems: { type: integer, example: 156 }
+        totalPages: { type: integer, example: 16 }
+    ApiFieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field: { type: string, example: emailAddress }
+        message: { type: string, example: Invalid email format }
+        code: { type: string, nullable: true }
+    ErrorEnvelope:
+      type: object
+      required: [code, message, errors, traceId]
+      properties:
+        code: { type: integer, example: 40001 }
+        message: { type: string, example: Validation failed }
+        errors: { type: array, items: { $ref: '#/components/schemas/ApiFieldError' } }
+        traceId: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+    RoleCode: { type: string, enum: [SUPER_ADMIN, OPERATIONS_MANAGER, DISPATCHER, FINANCE, PROPERTY_CS_STAFF] }
+    LocationRegion: { type: string, enum: [MACAU_PENINSULA, COTAI, HONG_KONG, AIRPORT] }
+    DriverStatus: { type: string, enum: [ACTIVE, INACTIVE, SUSPENDED] }
+    DriverAvailability: { type: string, enum: [AVAILABLE, ON_TRIP, OFF_DUTY, BREAK] }
+    NotificationEventType: { type: string, enum: [BOOKING_CONFIRMATION, TRIP_REMINDER, DRIVER_ASSIGNED, TRIP_STARTED, BOOKING_CANCELLED] }
+    NotificationChannel: { type: string, enum: [EMAIL, SMS, PUSH, IN_APP] }
+    Coordinates:
+      type: object
+      required: [latitude, longitude]
+      properties:
+        latitude: { type: number, format: double, minimum: -90, maximum: 90 }
+        longitude: { type: number, format: double, minimum: -180, maximum: 180 }
+    Geofence:
+      type: object
+      required: [isEnabled, radiusMeters]
+      properties:
+        isEnabled: { type: boolean }
+        radiusMeters: { type: number, format: double, minimum: 10, maximum: 5000 }
+    EmergencyContact:
+      type: object
+      required: [name, phone]
+      properties:
+        name: { type: string }
+        phone: { type: string }
+    CreatePortalUserRequest:
+      type: object
+      additionalProperties: false
+      required: [name, corporateEmail, roleCode, hasAllPropertyAccess, propertyId, isActive]
+      properties:
+        name: { type: string }
+        corporateEmail: { type: string, format: email, description: 'Stored lower-cased; unique ignoring case.' }
+        roleCode: { $ref: '#/components/schemas/RoleCode' }
+        hasAllPropertyAccess: { type: boolean }
+        propertyId: { type: string, nullable: true, description: 'Required key. null when hasAllPropertyAccess is true, otherwise one uploaded property code.' }
+        isActive: { type: boolean }
+    PatchPortalUserRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string }
+        corporateEmail: { type: string, format: email }
+        roleCode: { $ref: '#/components/schemas/RoleCode' }
+        hasAllPropertyAccess: { type: boolean }
+        propertyId: { type: string, nullable: true, description: 'Explicit null clears the single property (use with hasAllPropertyAccess=true).' }
+        isActive: { type: boolean }
+    PortalUserView:
+      type: object
+      required: [userId, name, corporateEmail, roleCode, hasAllPropertyAccess, isActive, identityProvider, version]
+      properties:
+        userId: { type: string, example: user_0190a1b2c3d4 }
+        name: { type: string }
+        corporateEmail: { type: string, format: email }
+        roleCode: { $ref: '#/components/schemas/RoleCode' }
+        hasAllPropertyAccess: { type: boolean }
+        propertyId: { type: string, nullable: true, description: 'Omitted when null.' }
+        isActive: { type: boolean }
+        identityProvider: { type: string, example: CORPORATE_SSO }
+        version: { type: integer, format: int64 }
+    CreateDriverRequest:
+      type: object
+      additionalProperties: false
+      required: [name, licenseNumber, licenseExpiryDate, phone, propertyId, status, languages, emergencyContact]
+      properties:
+        name: { type: string }
+        licenseNumber: { type: string, description: 'Unique ignoring case.' }
+        licenseExpiryDate: { type: string, format: date, description: 'Calendar date YYYY-MM-DD, not a UTC instant.' }
+        phone: { type: string }
+        propertyId: { type: string }
+        assignedVehicleId: { type: string, nullable: true, description: 'Vehicle ID from the vehicles collection. The vehicle must belong to the driver property and be visible to the caller. Vehicles bound to another driver are rejected. Both binding directions are updated in one transaction. Null means unassigned; omission on PATCH keeps the binding. Changing the driver property requires clearing or replacing an incompatible vehicle binding.' }
+        status: { $ref: '#/components/schemas/DriverStatus' }
+        languages: { type: array, minItems: 1, items: { type: string }, description: 'Non-blank, no duplicates (case-insensitive).' }
+        emergencyContact: { $ref: '#/components/schemas/EmergencyContact' }
+    PatchDriverRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string }
+        licenseNumber: { type: string }
+        licenseExpiryDate: { type: string, format: date }
+        phone: { type: string }
+        propertyId: { type: string }
+        assignedVehicleId: { type: string, nullable: true, description: 'Vehicle ID from the vehicles collection. The vehicle must belong to the driver property and be visible to the caller. Vehicles bound to another driver are rejected. Both binding directions are updated in one transaction. Null means unassigned; omission on PATCH keeps the binding. Changing the driver property requires clearing or replacing an incompatible vehicle binding.' }
+        status: { $ref: '#/components/schemas/DriverStatus' }
+        languages: { type: array, minItems: 1, items: { type: string }, description: 'Replaces the whole list.' }
+        emergencyContact:
+          type: object
+          additionalProperties: false
+          description: Merged field by field.
+          properties:
+            name: { type: string }
+            phone: { type: string }
+    DriverRestriction:
+      description: Present for INACTIVE (reason "Deactivated by Operations") and SUSPENDED (reason "Suspended by Operations") drivers; omitted for ACTIVE.
+      type: object
+      properties:
+        reason: { type: string, nullable: true }
+        effectiveDate: { type: string, format: date, nullable: true }
+    DriverView:
+      type: object
+      required: [driverId, name, licenseNumber, licenseExpiryDate, phone, propertyId, assignedVehicle, status, languages, emergencyContact, version]
+      properties:
+        driverId: { type: string, example: driver_0190a1b2c3d4 }
+        name: { type: string }
+        licenseNumber: { type: string }
+        licenseExpiryDate: { type: string, format: date }
+        phone: { type: string }
+        propertyId: { type: string }
+        assignedVehicleId: { type: string, nullable: true, description: 'Bound vehicle ID; omitted when unassigned or for legacy text records.' }
+        assignedVehicle: { type: string, readOnly: true, description: 'Vehicle label resolved from the bound ID; legacy labels remain readable.' }
+        status: { $ref: '#/components/schemas/DriverStatus' }
+        languages: { type: array, items: { type: string } }
+        emergencyContact: { $ref: '#/components/schemas/EmergencyContact' }
+        availability: { allOf: [ { $ref: '#/components/schemas/DriverAvailability' } ], nullable: true, description: 'Read-only; omitted until a trusted synchronisation source exists.' }
+        availabilitySource: { type: string, nullable: true }
+        syncedAt: { type: string, format: date-time, nullable: true, description: ISO 8601 UTC. }
+        restriction: { allOf: [ { $ref: '#/components/schemas/DriverRestriction' } ], nullable: true }
+        version: { type: integer, format: int64 }
+    CreateLocationRequest:
+      type: object
+      additionalProperties: false
+      required: [name, address, coordinates, region, categoryCode, contactPerson, contactPhone, operatingHours, geofence, isActive]
+      properties:
+        name: { type: string, description: 'Unique ignoring case.' }
+        address: { type: string }
+        coordinates: { $ref: '#/components/schemas/Coordinates' }
+        region: { $ref: '#/components/schemas/LocationRegion' }
+        categoryCode: { type: string, description: 'Uploaded category code, not the display name.' }
+        contactPerson: { type: string }
+        contactPhone: { type: string }
+        operatingHours: { type: string }
+        geofence: { $ref: '#/components/schemas/Geofence' }
+        isActive: { type: boolean }
+        notes: { type: string, nullable: true }
+    PatchLocationRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string }
+        address: { type: string }
+        coordinates:
+          type: object
+          additionalProperties: false
+          properties:
+            latitude: { type: number, format: double }
+            longitude: { type: number, format: double }
+        region: { $ref: '#/components/schemas/LocationRegion' }
+        categoryCode: { type: string }
+        contactPerson: { type: string }
+        contactPhone: { type: string }
+        operatingHours: { type: string }
+        geofence:
+          type: object
+          additionalProperties: false
+          properties:
+            isEnabled: { type: boolean }
+            radiusMeters: { type: number, format: double }
+        isActive: { type: boolean }
+        notes: { type: string, nullable: true, description: 'Explicit null clears the notes.' }
+    LocationView:
+      type: object
+      required: [locationId, name, address, coordinates, region, categoryCode, contactPerson, contactPhone, operatingHours, geofence, isActive, sortOrder, version]
+      properties:
+        locationId: { type: string, example: location_0190a1b2c3d4 }
+        name: { type: string }
+        address: { type: string }
+        coordinates: { $ref: '#/components/schemas/Coordinates' }
+        region: { $ref: '#/components/schemas/LocationRegion' }
+        categoryCode: { type: string }
+        contactPerson: { type: string }
+        contactPhone: { type: string }
+        operatingHours: { type: string }
+        geofence: { $ref: '#/components/schemas/Geofence' }
+        isActive: { type: boolean }
+        notes: { type: string, nullable: true }
+        sortOrder: { type: integer, format: int32, description: 'Position inside the region, from 1.' }
+        version: { type: integer, format: int64 }
+    LocationOrderingRequest:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [locationId]
+            properties:
+              locationId: { type: string }
+    LocationOrderingView:
+      type: object
+      required: [region, items]
+      properties:
+        region: { $ref: '#/components/schemas/LocationRegion' }
+        items:
+          type: array
+          items:
+            type: object
+            required: [locationId, sortOrder, version]
+            properties:
+              locationId: { type: string }
+              sortOrder: { type: integer, format: int32 }
+              version: { type: integer, format: int64 }
+    CreateCustomerBlacklistRequest:
+      type: object
+      additionalProperties: false
+      required: [customerName, memberId, reason, effectiveDate, expiryDate, isActive]
+      properties:
+        customerName: { type: string }
+        memberId: { type: string, description: 'Unique ignoring case.' }
+        reason: { type: string }
+        effectiveDate: { type: string, format: date, description: 'Inclusive.' }
+        expiryDate: { type: string, format: date, description: 'Inclusive; not earlier than effectiveDate.' }
+        isActive: { type: boolean }
+    PatchCustomerBlacklistRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        customerName: { type: string }
+        memberId: { type: string }
+        reason: { type: string }
+        effectiveDate: { type: string, format: date }
+        expiryDate: { type: string, format: date }
+        isActive: { type: boolean }
+    CustomerBlacklistView:
+      type: object
+      required: [blacklistId, customerName, memberId, reason, effectiveDate, expiryDate, isActive, version]
+      properties:
+        blacklistId: { type: string, example: blacklist_0190a1b2c3d4 }
+        customerName: { type: string }
+        memberId: { type: string }
+        reason: { type: string }
+        effectiveDate: { type: string, format: date }
+        expiryDate: { type: string, format: date }
+        isActive: { type: boolean }
+        version: { type: integer, format: int64 }
+    AuditView:
+      type: object
+      required: [auditId, actor, operation, resourceType, resourceId, occurredAt, outcome, traceId, sourceService]
+      properties:
+        auditId: { type: string }
+        actor: { type: string }
+        operation: { type: string, example: portal-user.update }
+        resourceType: { type: string }
+        resourceId: { type: string }
+        occurredAt: { type: string, format: date-time, description: ISO 8601 UTC. }
+        outcome: { type: string, enum: [Succeeded, Failed] }
+        traceId: { type: string }
+        sourceService: { type: string }
+        changeSummary: { type: string, nullable: true, description: 'Field names only, never values.' }
+        reasonReference: { type: string, nullable: true }
+        propertyId: { type: string, nullable: true }
+        device: { type: string, nullable: true, description: 'Not populated until a trusted source exists (Q11).' }
+        sourceIp: { type: string, nullable: true, description: 'Not populated until a trusted source exists (Q11).' }
+        sessionReference: { type: string, nullable: true, description: 'Not populated until a trusted source exists (Q11).' }
+    PropertyView:
+      type: object
+      required: [propertyId, name, address, contactPerson, contactPhone, assignedFleetCount, operatingHours, serviceLevel, minimumLeadTimeHours, cancellationPolicyReference, membershipEligibility, vipOverrideRule, isActive, isDeleted, version]
+      properties:
+        propertyId: { type: string }
+        name: { type: string }
+        address: { type: string }
+        contactPerson: { type: string }
+        contactPhone: { type: string }
+        assignedFleetCount: { type: integer, format: int32, minimum: 0 }
+        operatingHours: { type: string }
+        serviceLevel: { type: string }
+        minimumLeadTimeHours: { type: integer, format: int32, minimum: 0 }
+        cancellationPolicyReference: { type: string }
+        membershipEligibility: { type: string }
+        dailyQuota: { type: integer, format: int32, nullable: true, description: 'From Booking quota; omitted while unavailable.' }
+        vipOverrideRule: { type: string }
+        isActive: { type: boolean }
+        isDeleted: { type: boolean }
+        version: { type: integer, format: int64, minimum: 1 }
+    CreatePropertyRequest:
+      type: object
+      required: [propertyId, name, assignedFleetCount, minimumLeadTimeHours]
+      properties:
+        propertyId: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{0,31}$' }
+        name: { type: string, minLength: 1 }
+        address: { type: string, default: '' }
+        contactPerson: { type: string, default: '' }
+        contactPhone: { type: string, default: '' }
+        assignedFleetCount: { type: integer, format: int32, minimum: 0 }
+        operatingHours: { type: string, default: '' }
+        serviceLevel: { type: string, default: '' }
+        minimumLeadTimeHours: { type: integer, format: int32, minimum: 0 }
+        cancellationPolicyReference: { type: string, default: '' }
+        membershipEligibility: { type: string, default: '' }
+        vipOverrideRule: { type: string, default: '' }
+        isActive: { type: boolean, default: true }
+    PatchPropertyRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1 }
+        address: { type: string }
+        contactPerson: { type: string }
+        contactPhone: { type: string }
+        assignedFleetCount: { type: integer, format: int32, minimum: 0 }
+        operatingHours: { type: string }
+        serviceLevel: { type: string }
+        minimumLeadTimeHours: { type: integer, format: int32, minimum: 0 }
+        cancellationPolicyReference: { type: string }
+        membershipEligibility: { type: string }
+        vipOverrideRule: { type: string }
+        isActive: { type: boolean }
+    CancellationReasonView:
+      type: object
+      required: [reasonCode, name, pointsReturnPolicyCode, pointsReturnReference, source]
+      properties:
+        reasonCode: { type: string }
+        name: { type: string }
+        pointsReturnPolicyCode: { type: string }
+        pointsReturnReference: { type: string }
+        source: { type: string }
+    LocationCategoryView:
+      type: object
+      required: [categoryCode, name, description, isActive]
+      properties:
+        categoryCode: { type: string }
+        name: { type: string }
+        description: { type: string }
+        isActive: { type: boolean }
+    TravelBufferView:
+      type: object
+      required: [routeCategoryCode, routeCategory, bufferMinutes, navigationProvider, isTrafficAwareEtaEnabled, applicationRule]
+      properties:
+        routeCategoryCode: { type: string }
+        routeCategory: { type: string }
+        bufferMinutes: { type: integer, format: int32, minimum: 0 }
+        navigationProvider: { type: string, enum: [GOOGLE_MAPS, AMAP] }
+        isTrafficAwareEtaEnabled: { type: boolean, description: 'Configured on/off only; not a live connectivity result.' }
+        applicationRule: { type: string }
+    NotificationTemplateView:
+      type: object
+      required: [templateId, eventType, eventTrigger, channels, contentTemplate, isActive]
+      properties:
+        templateId: { type: string }
+        eventType: { $ref: '#/components/schemas/NotificationEventType' }
+        eventTrigger: { type: string }
+        channels: { type: array, minItems: 1, uniqueItems: true, items: { $ref: '#/components/schemas/NotificationChannel' } }
+        contentTemplate: { type: string }
+        isActive: { type: boolean }
+    NotificationChannelView:
+      type: object
+      required: [eventType, channels, eventTrigger, isActive]
+      properties:
+        eventType: { $ref: '#/components/schemas/NotificationEventType' }
+        channels: { type: array, minItems: 1, uniqueItems: true, items: { $ref: '#/components/schemas/NotificationChannel' } }
+        eventTrigger: { type: string }
+        isActive: { type: boolean }
+    LoyaltyQualificationRulesView:
+      type: object
+      required: [authority, pointsEligibility, playQualificationReference, visitRequirementReference, specialDesignationReference, pointsExpiryReference]
+      properties:
+        authority: { type: string }
+        pointsEligibility: { type: string }
+        playQualificationReference: { type: string }
+        visitRequirementReference: { type: string }
+        specialDesignationReference: { type: string }
+        pointsExpiryReference: { type: string }
+    SelfBookingRulesView:
+      type: object
+      required: [minimumLeadTimeHours, maximumAdvanceDays, maximumActiveRequestsPerGuestPerDay, propertyAccessRule, eligibilitySource]
+      properties:
+        minimumLeadTimeHours: { type: integer, format: int32, minimum: 0 }
+        maximumAdvanceDays: { type: integer, format: int32, minimum: 0 }
+        maximumActiveRequestsPerGuestPerDay: { type: integer, format: int32, minimum: 0 }
+        propertyAccessRule: { type: string }
+        eligibilitySource: { type: string }
+    EligibilityRulesView:
+      type: object
+      required: [eligibleTierCodes, entitlementRule, pointsValidationRule, riskCheckRule, exhaustionRule]
+      properties:
+        eligibleTierCodes: { type: array, uniqueItems: true, items: { type: string } }
+        entitlementRule: { type: string }
+        pointsValidationRule: { type: string }
+        riskCheckRule: { type: string }
+        exhaustionRule: { type: string }
+    CsQualificationRulesView:
+      type: object
+      required: [eligibleGuestRule, justificationRule, approvalThresholdRule, verificationSource]
+      properties:
+        eligibleGuestRule: { type: string }
+        justificationRule: { type: string }
+        approvalThresholdRule: { type: string }
+        verificationSource: { type: string }
+    RolePermissionView:
+      type: object
+      required: [roleCode, roleName, canManageDrivers, canViewReports, canReviewApprovals, canManageConfiguration]
+      properties:
+        roleCode: { type: string }
+        roleName: { type: string }
+        canManageDrivers: { type: boolean }
+        canViewReports: { type: boolean }
+        canReviewApprovals: { type: boolean }
+        canManageConfiguration: { type: boolean }
+    SystemParametersView:
+      type: object
+      required: [language, timeZone, dateFormat, sessionTimeoutMinutes, passwordPolicyReference, pointsRedemptionMode, pointsExpiryReference]
+      properties:
+        language: { type: string, example: en }
+        timeZone: { type: string, example: Asia/Macau }
+        dateFormat: { type: string }
+        sessionTimeoutMinutes: { type: integer, format: int32, minimum: 1 }
+        passwordPolicyReference: { type: string }
+        pointsRedemptionMode: { type: string, enum: [REFERENCE_ONLY] }
+        pointsExpiryReference: { type: string }
+    IntegrationReferenceView:
+      type: object
+      required: [integrationCode, name, configuredStatus, purpose, configurationOwnership, environmentLabel, dataSource, accessPolicy]
+      properties:
+        integrationCode: { type: string, example: LOYALTY }
+        name: { type: string }
+        configuredStatus: { type: string, description: 'Configuration reference label only; not live connectivity.' }
+        purpose: { type: string }
+        configurationOwnership: { type: string }
+        environmentLabel: { type: string }
+        dataSource: { type: string }
+        accessPolicy: { type: string }
+    ConfigurationRegisterView:
+      type: object
+      required: [areaCode, areaName, mechanism, isEditable, owner, versionLabel, sourceLabel, modulePath]
+      properties:
+        areaCode: { type: string }
+        areaName: { type: string }
+        mechanism: { type: string, enum: [CONFIGURATION_UPLOAD, PORTAL_SCREEN] }
+        isEditable: { type: boolean }
+        owner: { type: string }
+        versionLabel: { type: string }
+        sourceLabel: { type: string }
+        modulePath: { type: string, description: 'In-app front-end path, not an API or redirect target.' }

@@ -1,0 +1,14 @@
+{
+  "pages": [
+    { "path": "pages/login/index", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/home/index", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/booking/index", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/bookings/index", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/tracking/index", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/dispatch/index", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/notifications/index", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/user/index", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/trip-detail/index", "style": { "navigationStyle": "custom" } }
+  ],
+  "globalStyle": { "navigationBarTitleText": "LMS User", "navigationBarBackgroundColor": "#4f5a9f", "backgroundColor": "#f5f6f9" }
+}

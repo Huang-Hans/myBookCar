@@ -1,0 +1,220 @@
+# LMS 应用服务：API 网关 + 五个业务 API（Platform / Dispatch / Booking / Notification / Reporting）+ 两个后台 Worker（Platform / Reporting）+ 前端静态站点。
+#
+# 先决条件：基础设施已由同目录的 docker-compose.yml（MongoDB、Redis、Kafka）与
+# docker-compose.keycloak.yml（Keycloak）部署并运行；本文件不含也不管理它们。
+#
+# 构建并启动（在仓库根目录执行）：
+#   docker-compose -p lms-app -f backend/docker/docker-compose.app.yml up -d --build
+# 部署机上先执行 JS 迁移，再构建启动：
+#   python3 ops.py all migrate
+#   python3 ops.py all deploy
+# 只启动不重建：把 --build 去掉，或 ops.py 用 start；停止：ops.py 用 stop。
+#
+# 项目名用 -p lms-app 指定，与基础设施的 -p lms 分开，两边的 down 不会互相影响；
+# version 字段供部署机上的 compose v1 识别文件格式（同 docker-compose.yml 的说明）。
+#
+# 服务一律使用主机网络（与部署机上 peterson 的容器一致），因此没有 ports 段：
+#   基础设施与服务之间都直接走宿主机地址——MongoDB 192.168.30.65:27017（副本集 rs0）、
+#   Keycloak http://192.168.30.65:8085/realms/lms、服务间调用 127.0.0.1:<端口>。
+#   监听端口沿用开发端口：网关 5088、Platform 5688、Dispatch 5689、Booking 5690、Notification 5691、Reporting 5692、前端 5188。
+#
+# 环境变量（写在同目录 .env，用 ops.py 或 --env-file 传入；.env 不入库）：
+#   LMS_ASPNETCORE_ENVIRONMENT  运行环境，默认 Development（保留 Swagger UI 与健康探针）
+#   LMS_HOST              部署机地址，默认 192.168.30.65（MongoDB 连接地址）
+#   MONGO_REPLICA_SET     MongoDB 副本集名，默认 rs0（事务要求副本集）
+#   KEYCLOAK_AUTHORITY    Keycloak realm 地址，默认 http://192.168.30.65:8085/realms/lms；
+#                         必须与 Keycloak 的 KC_HOSTNAME 完全一致，否则令牌 iss 校验不通过
+#   CORS_ALLOWED_ORIGIN_0..3  网关放行的浏览器来源；校验要求是带 scheme、无路径的源，可用 *. 匹配子域
+#   FILE_STORAGE_*       文件上传相关，见 platform-api 的说明
+#   APP_SIGNING_PRIVATE_KEY_PEM  司机/客户令牌签名私钥（PEM，仅 Platform 用）；缺失时登录与刷新返回 503
+#   APP_IDENTITY_PUBLIC_KEY_PEM  司机/客户令牌验证公钥（PEM，Platform/Dispatch/Booking 用），必须与私钥成对
+# Booking-to-Platform service keys are read from each service's appsettings.json:
+#   Booking ServiceSigning:PrivateKeyPem; Platform ServiceIdentity:PublicKeyPem.
+
+version: "3.8"
+
+# 服务发现：下游地址是服务名（如 http://platform-api），由 ServiceDiscovery 从
+# services__<服务名>__http__0 解析；应用服务都在宿主机上，因此统一指向 127.0.0.1 的对应端口。
+# 网关的 YARP 集群地址（http://platform-api）同样由这份配置解析。
+x-service-discovery: &service-discovery
+  services__platform-api__http__0: http://127.0.0.1:5688
+  services__dispatch-api__http__0: http://127.0.0.1:5689
+  services__booking-api__http__0: http://127.0.0.1:5690
+  services__notification-api__http__0: http://127.0.0.1:5691
+  services__reporting-api__http__0: http://127.0.0.1:5692
+
+# 业务 API 共用的身份与探针配置。Keycloak 目前是 HTTP，因此关掉元数据必须 HTTPS 的校验。
+x-api-environment: &api-environment
+  <<: *service-discovery
+  ASPNETCORE_ENVIRONMENT: ${LMS_ASPNETCORE_ENVIRONMENT:-Development}
+  Identity__Authority: ${KEYCLOAK_AUTHORITY:-http://192.168.30.65:8085/realms/lms}
+  Identity__RequireHttpsMetadata: "false"
+  HealthEndpoints__Enabled: "true"
+
+x-app-defaults: &app-defaults
+  network_mode: host
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  platform-api:
+    <<: *app-defaults
+    container_name: lms-platform-api
+    build:
+      context: ..
+      dockerfile: src/Services/Platform/LMS.Platform.Api/Dockerfile
+    environment:
+      <<: *api-environment
+      ASPNETCORE_URLS: http://0.0.0.0:5688
+      Mongo__ConnectionString: mongodb://${LMS_HOST:-192.168.30.65}:27017/lms_platform?replicaSet=${MONGO_REPLICA_SET:-rs0}
+      ConfigurationAssets__Environment: ${CONFIGURATION_ASSETS_ENVIRONMENT:-Development}
+      # 文件上传：FileStorage 各项全部配置后登记与上传才可用，否则按设计返回 503（与本地开发一致）。
+      # 内容目录固定在 lms-files 卷；需要启用时在 .env 提供签名密钥（至少 32 字符）、大小与类型上限。
+      FileStorage__RootPath: ${FILE_STORAGE_ROOT_PATH:-/var/lib/lms/files}
+      FileStorage__PublicBaseUrl: ${FILE_STORAGE_PUBLIC_BASE_URL:-http://192.168.30.65:5088}
+      FileStorage__SigningKey: ${FILE_STORAGE_SIGNING_KEY:-}
+      FileStorage__MaxSizeBytes: ${FILE_STORAGE_MAX_SIZE_BYTES:-0}
+      FileStorage__AllowedContentTypes__0: ${FILE_STORAGE_ALLOWED_CONTENT_TYPE_0:-}
+      # 司机/客户令牌：Platform 用 AppSigning 私钥签发、用成对的 AppIdentity 公钥校验（两端都从此处注入）。
+      AppSigning__PrivateKeyPem: ${APP_SIGNING_PRIVATE_KEY_PEM:-}
+      AppIdentity__PublicKeyPem: ${APP_IDENTITY_PUBLIC_KEY_PEM:-}
+    volumes:
+      - lms-files:/var/lib/lms/files
+
+  dispatch-api:
+    <<: *app-defaults
+    container_name: lms-dispatch-api
+    build:
+      context: ..
+      dockerfile: src/Services/Dispatch/LMS.Dispatch.Api/Dockerfile
+    environment:
+      <<: *api-environment
+      ASPNETCORE_URLS: http://0.0.0.0:5689
+      Mongo__ConnectionString: mongodb://${LMS_HOST:-192.168.30.65}:27017/lms_dispatch?replicaSet=${MONGO_REPLICA_SET:-rs0}
+      # 司机令牌验证：公钥与 Platform 的 AppSigning 私钥成对；缺失时司机令牌一律校验失败。
+      AppIdentity__PublicKeyPem: ${APP_IDENTITY_PUBLIC_KEY_PEM:-}
+
+  booking-api:
+    <<: *app-defaults
+    container_name: lms-booking-api
+    build:
+      context: ..
+      dockerfile: src/Services/Booking/LMS.Booking.Api/Dockerfile
+    environment:
+      <<: *api-environment
+      ASPNETCORE_URLS: http://0.0.0.0:5690
+      Mongo__ConnectionString: mongodb://${LMS_HOST:-192.168.30.65}:27017/lms_booking?replicaSet=${MONGO_REPLICA_SET:-rs0}
+      # 客户令牌验证：公钥与 Platform 的 AppSigning 私钥成对；缺失时客户令牌一律校验失败。
+      AppIdentity__PublicKeyPem: ${APP_IDENTITY_PUBLIC_KEY_PEM:-}
+
+  notification-api:
+    <<: *app-defaults
+    container_name: lms-notification-api
+    build:
+      context: ..
+      dockerfile: src/Services/Notification/LMS.Notification.Api/Dockerfile
+    environment:
+      <<: *api-environment
+      ASPNETCORE_URLS: http://0.0.0.0:5691
+      Mongo__ConnectionString: mongodb://${LMS_HOST:-192.168.30.65}:27017/lms_notification?replicaSet=${MONGO_REPLICA_SET:-rs0}
+      # 投递事实来源接入前保持 false：通知历史读取返回 503，不返回空列表冒充真实结果。
+
+  reporting-api:
+    <<: *app-defaults
+    container_name: lms-reporting-api
+    build:
+      context: ..
+      dockerfile: src/Services/Reporting/LMS.Reporting.Api/Dockerfile
+    environment:
+      <<: *api-environment
+      ASPNETCORE_URLS: http://0.0.0.0:5692
+      Mongo__ConnectionString: mongodb://${LMS_HOST:-192.168.30.65}:27017/lms_reporting?replicaSet=${MONGO_REPLICA_SET:-rs0}
+      # 报表行由 Reporting 每 10 分钟重算最近 8 个业务日（读取 Booking / Dispatch / Platform 的报表来源接口），默认开启。
+      # 首次上线或修正历史数据：设置回填区间（YYYY-MM-DD），启动后先回填一次。
+      Reporting__Refresh__BackfillFrom: ${REPORT_BACKFILL_FROM:-}
+      Reporting__Refresh__BackfillTo: ${REPORT_BACKFILL_TO:-}
+      # 导出结果文件：FileStorage 配置齐全后导出才可用，否则申请返回 503；内容目录固定在 lms-report-files 卷。
+      FileStorage__RootPath: ${REPORT_FILE_STORAGE_ROOT_PATH:-/var/lib/lms/reports}
+      FileStorage__PublicBaseUrl: ${FILE_STORAGE_PUBLIC_BASE_URL:-http://192.168.30.65:5088}
+      FileStorage__SigningKey: ${FILE_STORAGE_SIGNING_KEY:-}
+    volumes:
+      - lms-report-files:/var/lib/lms/reports
+
+  api-gateway:
+    <<: *app-defaults
+    container_name: lms-api-gateway
+    build:
+      context: ..
+      dockerfile: src/LMS.ApiGateway/Dockerfile
+    depends_on:
+      - platform-api
+      - dispatch-api
+      - booking-api
+      - notification-api
+      - reporting-api
+    environment:
+      <<: *service-discovery
+      ASPNETCORE_ENVIRONMENT: ${LMS_ASPNETCORE_ENVIRONMENT:-Development}
+      ASPNETCORE_URLS: http://0.0.0.0:5088
+      Identity__Authority: ${KEYCLOAK_AUTHORITY:-http://192.168.30.65:8085/realms/lms}
+      Identity__RequireHttpsMetadata: "false"
+      HealthEndpoints__Enabled: "true"
+      # 浏览器来源白名单，开发环境下这四项覆盖 appsettings.Development.json 的 localhost 列表。
+      Cors__AllowedOrigins__0: ${CORS_ALLOWED_ORIGIN_0:-http://192.168.30.65:5173}
+      Cors__AllowedOrigins__1: ${CORS_ALLOWED_ORIGIN_1:-http://192.168.30.65:5088}
+      Cors__AllowedOrigins__2: ${CORS_ALLOWED_ORIGIN_2:-http://localhost:5173}
+      Cors__AllowedOrigins__3: ${CORS_ALLOWED_ORIGIN_3:-https://*.weprogram.site}
+
+  # Independent Admin and Customer Service SPAs, both proxying /api to the gateway.
+  admin-web:
+    <<: *app-defaults
+    container_name: lms-admin-web
+    build:
+      context: ../../frontend
+      dockerfile: LMS-Admin/Dockerfile
+
+  user-web:
+    <<: *app-defaults
+    container_name: lms-user-web
+    build:
+      context: ../../frontend
+      dockerfile: LMS-User/Dockerfile
+
+  # 司机端 / 客户端的 uni-app H5 构建（hash 路由），同样由各自 nginx 反代 /api 到网关。
+  driver-web:
+    <<: *app-defaults
+    container_name: lms-driver-web
+    build:
+      # 上下文是 frontend 根目录：两个 app 都引用共享的 map.env.ts / map.config.ts（在 app 目录之外）。
+      context: ../../frontend
+      dockerfile: LMS-DriverApp/Dockerfile
+      args:
+        VITE_AMAP_WEB_KEY: ${AMAP_WEB_KEY:-}
+        VITE_AMAP_SECURITY_JS_CODE: ${AMAP_SECURITY_JS_CODE:-}
+    volumes:
+      # 安装包下载目录：宿主机 ~/downloads，容器内挂在静态站 /downloads 下（只读）。
+      - ${LMS_DOWNLOADS_DIR:-/home/babayaga/downloads}:/usr/share/nginx/html/downloads:ro
+
+  client-web:
+    <<: *app-defaults
+    container_name: lms-client-web
+    build:
+      # 上下文是 frontend 根目录：两个 app 都引用共享的 map.env.ts / map.config.ts（在 app 目录之外）。
+      context: ../../frontend
+      dockerfile: LMS-ClientApp/Dockerfile
+      args:
+        VITE_AMAP_WEB_KEY: ${AMAP_WEB_KEY:-}
+        VITE_AMAP_SECURITY_JS_CODE: ${AMAP_SECURITY_JS_CODE:-}
+    volumes:
+      # 安装包下载目录：宿主机 ~/downloads，容器内挂在静态站 /downloads 下（只读）。
+      - ${LMS_DOWNLOADS_DIR:-/home/babayaga/downloads}:/usr/share/nginx/html/downloads:ro
+
+volumes:
+  # FileStorage 的文件内容；容器重建不丢。启用上传前该目录一直为空。
+  lms-files:
+  # 报表导出结果文件；容器重建不丢。
+  lms-report-files:

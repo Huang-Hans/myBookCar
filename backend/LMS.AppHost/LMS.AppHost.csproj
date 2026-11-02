@@ -1,0 +1,24 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.2.4">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>bb483a9f-2f17-4304-b50d-b8a9d42426fe</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MessagePack" Version="3.1.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\src\LMS.ApiGateway\LMS.ApiGateway.csproj" />
+    <ProjectReference Include="..\src\Services\Platform\LMS.Platform.Api\LMS.Platform.Api.csproj" />
+    <ProjectReference Include="..\src\Services\Dispatch\LMS.Dispatch.Api\LMS.Dispatch.Api.csproj" />
+    <ProjectReference Include="..\src\Services\Booking\LMS.Booking.Api\LMS.Booking.Api.csproj" />
+    <ProjectReference Include="..\src\Services\Notification\LMS.Notification.Api\LMS.Notification.Api.csproj" />
+    <ProjectReference Include="..\src\Services\Reporting\LMS.Reporting.Api\LMS.Reporting.Api.csproj" />
+  </ItemGroup>
+
+</Project>

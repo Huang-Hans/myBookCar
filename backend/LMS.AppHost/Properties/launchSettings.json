@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "https": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "https://localhost:17276;http://localhost:15078",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Local",
+        "DOTNET_ENVIRONMENT": "Local",
+        "ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL": "https://localhost:21170",
+        "ASPIRE_DASHBOARD_MCP_ENDPOINT_URL": "https://localhost:23040",
+        "ASPIRE_RESOURCE_SERVICE_ENDPOINT_URL": "https://localhost:22076"
+      }
+    },
+    "http": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:15078",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Local",
+        "DOTNET_ENVIRONMENT": "Local",
+        "ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL": "http://localhost:19114",
+        "ASPIRE_DASHBOARD_MCP_ENDPOINT_URL": "http://localhost:18179",
+        "ASPIRE_RESOURCE_SERVICE_ENDPOINT_URL": "http://localhost:20002"
+      }
+    },
+    "http-kafka": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:15078",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Local",
+        "DOTNET_ENVIRONMENT": "Local",
+        "Kafka__Enabled": "true",
+        "ASPIRE_ALLOW_UNSECURED_TRANSPORT": "true",
+        "ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL": "http://localhost:19114",
+        "ASPIRE_DASHBOARD_MCP_ENDPOINT_URL": "http://localhost:18179",
+        "ASPIRE_RESOURCE_SERVICE_ENDPOINT_URL": "http://localhost:20002"
+      }
+    }
+  }
+}

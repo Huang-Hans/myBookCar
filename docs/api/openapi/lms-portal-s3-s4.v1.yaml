@@ -1,0 +1,867 @@
+# Delivery contract snapshot. Runtime query/header metadata is generated from the actual request contracts.
+# Refresh published parameter metadata from generated OpenAPI; do not maintain a separate parameter provider.
+openapi: 3.0.3
+info:
+  title: LMS Portal Management API (S3 + S4)
+  version: 1.0.0
+  description: >-
+    Business operations of Portal stages S3 (membership tiers, property quotas, quota overrides,
+    qualification references) and S4 (cross-border approvals, approval materials, files, blacklist hits):
+    CF13, QT01-QT03, OV01-OV03, CQ01-CQ05, CB01-CB07, FI01, BL05, plus the supplementary signed upload
+    endpoint (FI02). Paths, DTOs and codes follow docs/design/LMS-spec-20261008-05-api-contract.md; application codes are registered
+    in docs/api/error-codes.md. Every response uses the unified envelope and carries traceId. Business routes
+    require a Bearer token; the caller's role, permissions and property scope come from the persisted portal
+    user in Platform, never from request headers.
+    Data sources: property quotas, qualification references and the cross-border queue are owned by Booking and
+    have no import path yet (Q03/Q05/Q06), so lists return the true empty result until the owner provides data;
+    quota usage that is not known makes QT03 answer 503. OV03 records the manager's decision only and does not
+    change any quota (Q05). The file upload endpoint stores bytes to a configured directory and verifies size
+    and sha256, but there is no malware scanner yet: a file whose size and sha256 match is set to CLEAN right after the upload,
+    so CB04 isVerified=true and CB06 / CB07 are not blocked by scanning; once a real scanner is connected, only a passed scan will make a file CLEAN.
+    A repeated POST with the same Idempotency-Key and identical content answers with the resource's current
+    state (Q09 open), not a byte-for-byte replay of the first response.
+servers:
+  - url: http://localhost:5088
+    description: API gateway (Development)
+tags:
+  - name: MembershipTiers
+  - name: PropertyQuotas
+  - name: QuotaOverrides
+  - name: Qualifications
+  - name: CrossBorderApprovals
+  - name: Files
+security:
+  - bearerAuth: []
+paths:
+  /api/platform/staff/v1/membership-tiers:
+    get:
+      tags: [MembershipTiers]
+      operationId: listMembershipTiers
+      summary: CF13 Read membership tier cards and entitlement matrix (permission configuration:read; served by Platform)
+      description: Not paginated. activeMemberCount comes from the external membership reference (Q03) and is omitted while that source is not connected.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/MembershipTierView' } } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/property-quotas:
+    get:
+      tags: [PropertyQuotas]
+      operationId: listPropertyQuotas
+      summary: QT01 List property quotas and usage (permission quotas:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: propertyId, dailyQuota, weeklyQuota, monthlyQuota, dailyUsed, weeklyUsed, monthlyUsed, exhaustionPolicy. Default propertyId.', schema: { type: string } }
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/PropertyQuotaView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/property-quotas/{propertyId}:
+    parameters:
+      - { name: propertyId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [PropertyQuotas]
+      operationId: getPropertyQuota
+      summary: QT02 Read a property quota (permission quotas:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/PropertyQuotaView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    patch:
+      tags: [PropertyQuotas]
+      operationId: updatePropertyQuota
+      summary: QT03 Adjust daily / weekly / monthly quotas (permission quotas:write)
+      description: >-
+        The merged quotas must satisfy daily <= weekly <= monthly, and every changed limit must not be lower
+        than its authoritative usage. When a limit is changed and usage is not known the answer is 503 / 50300;
+        a missing usage is never treated as 0. Usage is read-only.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PatchPropertyQuotaRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/PropertyQuotaView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/quota-overrides:
+    get:
+      tags: [QuotaOverrides]
+      operationId: listQuotaOverrides
+      summary: OV01 List quota override requests (permission overrides:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: propertyId, guestId, additionalDailyEntitlements, justification, status, requestedBy, requestedAt, overrideId. Default requestedAt,overrideId.', schema: { type: string } }
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/QuotaOverrideView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    post:
+      tags: [QuotaOverrides]
+      operationId: createQuotaOverride
+      summary: OV02 Request additional daily entitlements (permission overrides:request)
+      description: Registers a pending request only; it never changes a quota. At most one pending request per property and guest.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateQuotaOverrideRequest' } } } }
+      responses:
+        '201': { description: Created (also returned for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/QuotaOverrideView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/quota-overrides/{overrideId}/decisions:
+    post:
+      tags: [QuotaOverrides]
+      operationId: decideQuotaOverride
+      summary: OV03 Approve or reject a quota override (permission overrides:decide)
+      description: >-
+        Records the manager's decision (status APPROVED or REJECTED) and the audit entry in one transaction.
+        It does not change any property quota or entitlement; the effect of an approval is not defined yet (Q05).
+        A request that is no longer MANAGER_APPROVAL_REQUIRED answers 409.
+      parameters:
+        - { name: overrideId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/QuotaOverrideDecisionRequest' } } } }
+      responses:
+        '200': { description: Success (also for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/QuotaOverrideView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/qualification-references:
+    get:
+      tags: [Qualifications]
+      operationId: listQualificationReferences
+      summary: CQ01 List qualification references (permission qualifications:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: guest.name, guest.guestId, guest.tierCode, propertyId, loyaltyOutcome, qualificationReference, status, qualificationId. Default guest.name,qualificationId.', schema: { type: string } }
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/QualificationStatus' } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/QualificationView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    post:
+      tags: [Qualifications]
+      operationId: createQualificationRequest
+      summary: Request a manager review for a guest at a property (permission qualifications:escalate)
+      description: >-
+        Requires Idempotency-Key. An open request for the same guest and property is not duplicated: an ESCALATED one is returned as is (200); one still MANAGER_APPROVAL_REQUIRED is escalated (200);
+        otherwise a new ESCALATED request is created (201). The requester, role and time come from the token and the server clock and are kept in request. Qualification-check only registers a pending
+        MANAGER_APPROVAL_REQUIRED record; this call is what actually asks for the review. There is no unique constraint, so two simultaneous first requests may create two records.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateQualificationRequest' } } } }
+      responses:
+        '201': { description: Created, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/QualificationView' } } } ] } } } }
+        '200': { description: Existing or escalated request, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/QualificationView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/qualification-references/{qualificationId}:
+    parameters:
+      - { name: qualificationId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Qualifications]
+      operationId: getQualificationReference
+      summary: CQ02 Read a qualification reference (permission qualifications:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/QualificationView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/qualification-references/{qualificationId}/escalations:
+    post:
+      tags: [Qualifications]
+      operationId: escalateQualification
+      summary: CQ03 Escalate a qualification exception (permission qualifications:escalate)
+      description: MANAGER_APPROVAL_REQUIRED to ESCALATED. Records the real caller, time and justification; never changes the external result or points.
+      parameters:
+        - { name: qualificationId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/QualificationJustificationRequest' } } } }
+      responses:
+        '200': { description: Success (also for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/QualificationView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/qualification-references/{qualificationId}/exception-approvals:
+    post:
+      tags: [Qualifications]
+      operationId: approveQualificationException
+      summary: CQ04 Approve an escalated qualification exception (permission qualifications:approve)
+      description: ESCALATED to APPROVED only. The requester gets a console notification (target QUALIFICATION). Use exception-rejections to reject.
+      parameters:
+        - { name: qualificationId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/QualificationJustificationRequest' } } } }
+      responses:
+        '200': { description: Success (also for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/QualificationView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/qualification-references/{qualificationId}/exception-rejections:
+    post:
+      tags: [Qualifications]
+      operationId: rejectQualificationException
+      summary: Reject an escalated qualification exception (permission qualifications:approve)
+      description: ESCALATED to REJECTED only. Records the manager's decision and comments; changes nothing external. The requester gets a console notification (target QUALIFICATION).
+      parameters:
+        - { name: qualificationId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/QualificationJustificationRequest' } } } }
+      responses:
+        '200': { description: Success (also for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/QualificationView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/qualification-audits:
+    get:
+      tags: [Qualifications]
+      operationId: listQualificationAudits
+      summary: CQ05 Query qualification operation audit (permission qualifications:read)
+      description: Booking-owned audit records that carry a structured qualification context; callers without all-property access only see their own property.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: actor, occurredAt, qualification.guestId, qualification.justification, qualification.status, auditId. Default occurredAt,auditId.', schema: { type: string } }
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/QualificationAuditView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/cross-border-approvals:
+    get:
+      tags: [CrossBorderApprovals]
+      operationId: listCrossBorderApprovals
+      summary: CB01 List the cross-border approval queue (permission approvals:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: tripReference, guest.name, guest.tierCode, propertyId, route.pickupName, route.dropoffName, pickupAt, slaDeadlineAt, status, approvalId. Default pickupAt,approvalId.', schema: { type: string } }
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/ApprovalStatus' } }
+        - { name: from, in: query, required: false, description: 'Inclusive lower bound of pickupAt (ISO 8601 UTC).', schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, description: 'Exclusive upper bound of pickupAt; must be later than from.', schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/CrossBorderApprovalView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/cross-border-approvals/{approvalId}:
+    parameters:
+      - { name: approvalId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [CrossBorderApprovals]
+      operationId: getCrossBorderApproval
+      summary: CB02 Read a cross-border approval (permission approvals:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CrossBorderApprovalView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/cross-border-approval-summaries:
+    get:
+      tags: [CrossBorderApprovals]
+      operationId: getCrossBorderApprovalSummary
+      summary: CB03 Read the pending count (permission approvals:read)
+      description: urgentCount is not provided because the urgency threshold is undefined (Q06). approvalChain is the display label list of the earliest pending approval (empty when none).
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/ApprovalStatus' } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/ApprovalSummaryView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/cross-border-approvals/{approvalId}/documents/{documentType}:
+    patch:
+      tags: [CrossBorderApprovals]
+      operationId: updateApprovalDocument
+      summary: CB04 Bind a file or change the manual verification result (permission approvals:materials)
+      description: >-
+        fileId must belong to this approval and document type.
+        isVerified=true additionally requires a bound file whose scan status is CLEAN (read from Platform); upload
+        and manual verification never substitute for each other. Binding a different file resets isVerified unless
+        the same request verifies it. Only PENDING approvals can change.
+      parameters:
+        - { name: approvalId, in: path, required: true, schema: { type: string } }
+        - { name: documentType, in: path, required: true, schema: { $ref: '#/components/schemas/ApprovalDocumentType' } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalDocumentPatchRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CrossBorderApprovalView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/cross-border-approvals/{approvalId}/documents/{documentType}/uploads:
+    post:
+      tags: [CrossBorderApprovals]
+      operationId: registerApprovalDocumentUpload
+      summary: CB05 Register a material upload and obtain the upload description (permission approvals:materials)
+      description: >-
+        Platform (the file owner) writes the metadata (scanStatus QUARANTINED at registration), audit and idempotency records and
+        signs a short-lived URL; this call does not change isVerified and does not claim the transfer or scan is
+        done. Content type and size limits come from deployment configuration (FileStorage); if file storage is not
+        configured the answer is 503.
+      parameters:
+        - { name: approvalId, in: path, required: true, schema: { type: string } }
+        - { name: documentType, in: path, required: true, schema: { $ref: '#/components/schemas/ApprovalDocumentType' } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/FileUploadRequest' } } } }
+      responses:
+        '201': { description: Created, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/UploadDescriptionView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/cross-border-approvals/{approvalId}/decisions:
+    post:
+      tags: [CrossBorderApprovals]
+      operationId: decideCrossBorderApproval
+      summary: CB06 Record a single approval decision (permission approvals:decide)
+      description: >-
+        comments is required for both decisions. APPROVED additionally requires all four documents verified, no
+        active customer restriction (Platform) and an ACTIVE assigned driver (Dispatch); a failed precondition answers
+        422 / 42200 with the failing fields. These cross-service facts are read at decision time and are not
+        strongly consistent with the transaction. The model has one final decision, not a three-stage workflow (Q06).
+      parameters:
+        - { name: approvalId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalDecisionRequest' } } } }
+      responses:
+        '200': { description: Success (also for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CrossBorderApprovalView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/cross-border-approval-decisions:
+    post:
+      tags: [CrossBorderApprovals]
+      operationId: bulkDecideCrossBorderApprovals
+      summary: CB07 Record a bulk decision for explicitly selected approvals (permission approvals:decide)
+      description: >-
+        All-or-nothing (contract recommendation, Q06 pending): every item is verified (visible, version, PENDING and,
+        for APPROVED, the same preconditions as CB06) before any write, and all decisions commit in one local
+        transaction. A missing or invisible approval or a failed precondition answers 422 with items[i] fields; a stale
+        version or non-pending state answers 409. The number of items is bounded by Approvals:MaxBulkItems (default 100).
+        A matching retry returns the current status and version of the requested approvals.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalBulkDecisionRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/ApprovalBulkDecisionView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/blacklist-hits:
+    get:
+      tags: [CrossBorderApprovals]
+      operationId: listBlacklistHits
+      summary: BL05 Read current blacklist hits in the pending queue (permission approvals:read)
+      description: Composed live from Booking's pending queue, Platform's active customer restrictions and Dispatch's driver status; nothing is persisted. Not paginated. Either source being unavailable answers 503.
+      parameters:
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/BlacklistHitView' } } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/staff/v1/file-uploads/{fileId}:
+    put:
+      tags: [Files]
+      operationId: uploadFileContent
+      summary: FI02 Upload file content through the signed URL returned by CB05 (served by Platform)
+      description: >-
+        Supplementary endpoint, not one of the 76 contract operations: FI02 is registered for reference only, so the
+        endpoint can be cited like the numbered operations. The contract defines only the JSON upload description and
+        leaves the transfer protocol to Q07. Authorised solely by the short-lived HMAC signature in the query string
+        (no Bearer). The body is the raw file; Content-Type must equal the registered type. Size must equal the
+        registered size and the sha256 of the received bytes must equal the registered sha256, otherwise the content is
+        discarded and the file is marked FAILED. A file whose content is already stored answers 409. No malware scan
+        runs, so a successful upload sets scanStatus CLEAN (the scanner is not connected yet; a mismatch sets FAILED).
+      security: []
+      parameters:
+        - { name: fileId, in: path, required: true, schema: { type: string } }
+        - { name: expires, in: query, required: true, description: 'Expiry as Unix seconds.', schema: { type: integer, format: int64 } }
+        - { name: signature, in: query, required: true, description: 'Lowercase hex HMAC-SHA256 signature.', schema: { type: string } }
+      requestBody: { required: true, content: { '*/*': { schema: { type: string, format: binary } } } }
+      responses:
+        '200': { description: Content stored, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/FileMetadataView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  headers:
+    TraceId: { description: 'Correlation id, identical to the body traceId.', schema: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 } }
+  parameters:
+    Page: { name: page, in: query, required: false, description: 'Page number, >= 1. Default 1.', schema: { type: integer, minimum: 1, default: 1 } }
+    PageSize: { name: pageSize, in: query, required: false, description: 'Page size. Default 10.', schema: { type: integer, enum: [10, 20, 50], default: 10 } }
+    Search: { name: search, in: query, required: false, description: 'Case-insensitive contains match on the visible columns; blank means no filter.', schema: { type: string } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, description: 'Non-blank key; the same key with different content answers 409 / 40900.', schema: { type: string } }
+  responses:
+    BadRequest:
+      description: 'Malformed request (40000) or validation failed (40001).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Unauthorized:
+      description: 'Not authenticated (40100) or token expired (40101).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Forbidden:
+      description: 'Insufficient permission (40300).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    NotFound:
+      description: 'Resource not found (40400), or not visible to the caller.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Conflict:
+      description: 'State conflict (40900): resource not in a state that allows the operation, duplicate pending request, or idempotency key reused with different content.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    UnprocessableEntity:
+      description: 'Business rule rejected (42200): the request is well formed but a precondition is not met; errors[] names the failing fields.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    InternalError:
+      description: 'Internal server error (50000).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    ServiceUnavailable:
+      description: 'Service unavailable (50300): a required source (authorization, configuration body, quota usage, another service, file storage) cannot give a real answer.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [code, message, traceId]
+      properties:
+        code: { type: integer, example: 20000 }
+        message: { type: string, example: success }
+        data: { nullable: true }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+        traceId: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+    PageMeta:
+      type: object
+      required: [traceId]
+      properties:
+        traceId: { type: string }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    Pagination:
+      type: object
+      required: [currentPage, pageSize, totalItems, totalPages]
+      properties:
+        currentPage: { type: integer, example: 1 }
+        pageSize: { type: integer, example: 10 }
+        totalItems: { type: integer, example: 156 }
+        totalPages: { type: integer, example: 16 }
+    ApiFieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field: { type: string, example: documents }
+        message: { type: string, example: All four documents must be verified before approval }
+        code: { type: string, nullable: true }
+    ErrorEnvelope:
+      type: object
+      required: [code, message, errors, traceId]
+      properties:
+        code: { type: integer, example: 42200 }
+        message: { type: string, example: Business rule rejected }
+        errors: { type: array, items: { $ref: '#/components/schemas/ApiFieldError' } }
+        traceId: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+    ExhaustionPolicy: { type: string, enum: [WAITLIST, AUTO_REJECT] }
+    OverrideStatus: { type: string, enum: [MANAGER_APPROVAL_REQUIRED, APPROVED, REJECTED] }
+    ReviewDecision: { type: string, enum: [APPROVED, REJECTED] }
+    QualificationStatus: { type: string, enum: [ELIGIBLE, MANAGER_APPROVAL_REQUIRED, ESCALATED, APPROVED, REJECTED], description: 'ESCALATED is the pending-manager-decision state (the console Pending Approval tab). REJECTED only records the review result and changes nothing external.' }
+    ApprovalStatus: { type: string, enum: [PENDING, APPROVED, REJECTED] }
+    ApprovalDocumentType: { type: string, enum: [PASSENGER_TRAVEL_DOCUMENT, VEHICLE_PERMIT, DRIVER_LICENSE, CUSTOMS_DECLARATION] }
+    MembershipTierView:
+      type: object
+      required: [tierCode, name, monthlyEntitlementQuota, bookingPriority, vehicleUpgradeReference, advanceBookingWindowHours, cancellationFlexibilityReference]
+      properties:
+        tierCode: { type: string, example: GOLD }
+        name: { type: string }
+        activeMemberCount: { type: integer, format: int64, nullable: true, description: 'External reference; omitted while not connected.' }
+        monthlyEntitlementQuota: { type: integer, format: int32, minimum: 0 }
+        bookingPriority: { type: string, enum: [STANDARD, PRIORITY] }
+        vehicleUpgradeReference: { type: string }
+        advanceBookingWindowHours: { type: integer, format: int32, minimum: 0 }
+        cancellationFlexibilityReference: { type: string }
+    PropertyQuotaView:
+      type: object
+      required: [propertyId, dailyQuota, weeklyQuota, monthlyQuota, exhaustionPolicy, version]
+      properties:
+        propertyId: { type: string }
+        dailyQuota: { type: integer, format: int32 }
+        weeklyQuota: { type: integer, format: int32 }
+        monthlyQuota: { type: integer, format: int32 }
+        exhaustionPolicy: { $ref: '#/components/schemas/ExhaustionPolicy' }
+        dailyUsed: { type: integer, format: int32, nullable: true, description: 'Read-only; omitted when unknown (never 0).' }
+        weeklyUsed: { type: integer, format: int32, nullable: true }
+        monthlyUsed: { type: integer, format: int32, nullable: true }
+        version: { type: integer, format: int64 }
+    PatchPropertyQuotaRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        dailyQuota: { type: integer, format: int32, minimum: 0 }
+        weeklyQuota: { type: integer, format: int32 }
+        monthlyQuota: { type: integer, format: int32 }
+        exhaustionPolicy: { $ref: '#/components/schemas/ExhaustionPolicy' }
+    CreateQuotaOverrideRequest:
+      type: object
+      additionalProperties: false
+      required: [propertyId, guestId, additionalDailyEntitlements, justification]
+      properties:
+        propertyId: { type: string }
+        guestId: { type: string }
+        additionalDailyEntitlements: { type: integer, format: int32, minimum: 1, maximum: 20 }
+        justification: { type: string }
+    QuotaOverrideDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision: { $ref: '#/components/schemas/ReviewDecision' }
+    QuotaOverrideView:
+      type: object
+      required: [overrideId, propertyId, guestId, additionalDailyEntitlements, justification, status, requestedBy, requestedAt, version]
+      properties:
+        overrideId: { type: string }
+        propertyId: { type: string }
+        guestId: { type: string }
+        additionalDailyEntitlements: { type: integer, format: int32 }
+        justification: { type: string }
+        status: { $ref: '#/components/schemas/OverrideStatus' }
+        requestedBy: { type: string }
+        requestedAt: { type: string, format: date-time }
+        decision:
+          type: object
+          nullable: true
+          required: [decision, decidedBy, decidedAt]
+          properties:
+            decision: { $ref: '#/components/schemas/ReviewDecision' }
+            decidedBy: { type: string }
+            decidedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64 }
+    GuestSnapshot:
+      type: object
+      required: [guestId, name, tierCode]
+      properties:
+        guestId: { type: string }
+        name: { type: string }
+        tierCode: { type: string }
+    QualificationJustificationRequest:
+      type: object
+      additionalProperties: false
+      required: [justification]
+      properties:
+        justification: { type: string }
+    QualificationView:
+      type: object
+      required: [qualificationId, guest, propertyId, loyaltyOutcome, qualificationReference, entitlementType, approvalChain, status, version]
+      properties:
+        qualificationId: { type: string }
+        guest: { $ref: '#/components/schemas/GuestSnapshot' }
+        propertyId: { type: string }
+        loyaltyOutcome: { type: string, description: 'External result label; never derived from points.' }
+        qualificationReference: { type: string }
+        entitlementType: { type: string }
+        pointsBalance: { type: integer, format: int64, nullable: true }
+        pointsRequired: { type: integer, format: int64, nullable: true }
+        approvalChain: { type: array, items: { type: string }, description: 'Display labels only; not roles and not used for authorization.' }
+        status: { $ref: '#/components/schemas/QualificationStatus' }
+        justification: { type: string, nullable: true }
+        operatorId: { type: string, nullable: true }
+        operatedAt: { type: string, format: date-time, nullable: true }
+        version: { type: integer, format: int64 }
+        request:
+          type: object
+          nullable: true
+          description: 'Who asked for the manager review, when and why. It is never overwritten by the approval / rejection. Omitted for records nobody has requested a review for. requestedByName / requestedByRole are only kept for new requests.'
+          required: [requestedBy, requestedAt]
+          properties:
+            requestedBy: { type: string }
+            requestedByName: { type: string, nullable: true }
+            requestedByRole: { type: string, nullable: true }
+            reason: { type: string, nullable: true }
+            requestedAt: { type: string, format: date-time }
+        decision:
+          type: object
+          nullable: true
+          description: 'Only for APPROVED / REJECTED. Approving or rejecting records the review outcome; it does not change the external membership, points or blacklist and does not bypass the minimum tier.'
+          required: [decidedBy, decidedAt]
+          properties:
+            decidedBy: { type: string }
+            decidedAt: { type: string, format: date-time }
+            comments: { type: string, nullable: true }
+    CreateQualificationRequest:
+      type: object
+      additionalProperties: false
+      required: [guestId, propertyId, justification]
+      properties:
+        guestId: { type: string }
+        propertyId: { type: string }
+        justification: { type: string, description: 'Reason for the review request; blank is rejected.' }
+    QualificationAuditView:
+      type: object
+      required: [auditId, actor, operation, resourceType, resourceId, occurredAt, outcome, traceId, sourceService]
+      properties:
+        auditId: { type: string }
+        actor: { type: string }
+        operation: { type: string, example: qualification.escalate }
+        resourceType: { type: string }
+        resourceId: { type: string }
+        occurredAt: { type: string, format: date-time }
+        outcome: { type: string, enum: [Succeeded, Failed] }
+        traceId: { type: string }
+        sourceService: { type: string, example: booking }
+        changeSummary: { type: string, nullable: true }
+        reasonReference: { type: string, nullable: true }
+        propertyId: { type: string, nullable: true }
+        device: { type: string, nullable: true }
+        sourceIp: { type: string, nullable: true }
+        sessionReference: { type: string, nullable: true }
+        qualification:
+          type: object
+          nullable: true
+          required: [guestId, justification, status]
+          properties:
+            guestId: { type: string }
+            justification: { type: string }
+            status: { type: string, enum: [ESCALATED, APPROVED] }
+    CrossBorderApprovalView:
+      type: object
+      required: [approvalId, tripReference, guest, propertyId, route, pickupAt, approvalChain, loyalty, documents, status, version]
+      properties:
+        approvalId: { type: string }
+        tripReference: { type: string }
+        guest: { $ref: '#/components/schemas/GuestSnapshot' }
+        propertyId: { type: string }
+        route:
+          type: object
+          required: [pickupName, dropoffName]
+          properties:
+            pickupName: { type: string }
+            dropoffName: { type: string }
+        pickupAt: { type: string, format: date-time }
+        slaDeadlineAt: { type: string, format: date-time, nullable: true }
+        assignedDriverId: { type: string, nullable: true }
+        assignedVehicle: { type: string, nullable: true }
+        approvalChain: { type: array, items: { type: string } }
+        loyalty:
+          type: object
+          required: [redemptionId, pointsRequired, entitlement, redemptionState]
+          properties:
+            redemptionId: { type: string }
+            pointsRequired: { type: integer, format: int64 }
+            entitlement: { type: string }
+            redemptionState: { type: string }
+        documents:
+          type: array
+          description: 'Exactly one slot per document type.'
+          items:
+            type: object
+            required: [documentType, isVerified]
+            properties:
+              documentType: { $ref: '#/components/schemas/ApprovalDocumentType' }
+              isVerified: { type: boolean }
+              fileId: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/ApprovalStatus' }
+        decision:
+          type: object
+          nullable: true
+          required: [decision, comments, decidedBy, decidedAt]
+          properties:
+            decision: { $ref: '#/components/schemas/ReviewDecision' }
+            comments: { type: string }
+            decidedBy: { type: string }
+            decidedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64 }
+    ApprovalSummaryView:
+      type: object
+      required: [pendingCount, approvalChain]
+      properties:
+        pendingCount: { type: integer, format: int32 }
+        approvalChain: { type: array, items: { type: string } }
+    ApprovalDocumentPatchRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        fileId: { type: string, description: 'Bind a file registered for this approval and document type; null is not accepted.' }
+        isVerified: { type: boolean }
+    FileUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [originalFileName, contentType, sizeBytes, sha256]
+      properties:
+        originalFileName: { type: string, description: 'File name only; path separators are rejected.' }
+        contentType: { type: string }
+        sizeBytes: { type: integer, format: int64, minimum: 1 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+    UploadDescriptionView:
+      type: object
+      required: [fileId, upload]
+      properties:
+        fileId: { type: string }
+        upload:
+          type: object
+          required: [url, method, contentType, expiresAt]
+          properties:
+            url: { type: string, format: uri }
+            method: { type: string, example: PUT }
+            contentType: { type: string }
+            expiresAt: { type: string, format: date-time }
+    ApprovalDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision, comments]
+      properties:
+        decision: { $ref: '#/components/schemas/ReviewDecision' }
+        comments: { type: string }
+    ApprovalBulkDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [items, decision, comments]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [approvalId]
+            properties:
+              approvalId: { type: string }
+        decision: { $ref: '#/components/schemas/ReviewDecision' }
+        comments: { type: string }
+    ApprovalBulkDecisionView:
+      type: object
+      required: [items, decision]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [approvalId, status, version]
+            properties:
+              approvalId: { type: string }
+              status: { $ref: '#/components/schemas/ApprovalStatus' }
+              version: { type: integer, format: int64 }
+        decision: { $ref: '#/components/schemas/ReviewDecision' }
+    BlacklistHitView:
+      type: object
+      required: [approvalId, tripReference, targetType, targetId, propertyId]
+      properties:
+        approvalId: { type: string }
+        tripReference: { type: string }
+        targetType: { type: string, enum: [CUSTOMER, DRIVER] }
+        targetId: { type: string, description: 'memberId or driverId.' }
+        reason: { type: string, nullable: true }
+        propertyId: { type: string }
+    FileMetadataView:
+      type: object
+      required: [fileId, originalFileName, contentType, sizeBytes, sha256, scanStatus, createdBy, createdAt]
+      properties:
+        fileId: { type: string }
+        approvalId: { type: string, nullable: true }
+        documentType: { allOf: [ { $ref: '#/components/schemas/ApprovalDocumentType' } ], nullable: true }
+        exportId: { type: string, nullable: true }
+        originalFileName: { type: string }
+        contentType: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        sha256: { type: string }
+        scanStatus: { type: string, enum: [QUARANTINED, CLEAN, INFECTED, FAILED] }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }

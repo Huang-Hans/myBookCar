@@ -1,0 +1,62 @@
+openapi: 3.0.3
+info:
+  title: LMS Internal Property Reference API
+  version: 1.0.0
+  description: >-
+    Service-owned reference checks used by Platform before property deletion. These routes are
+    internal and are not published through the gateway. Forward the caller's staff Bearer token;
+    properties:write and the requested property scope are required. Each service reads only its
+    own database, includes historical and disabled business records, and excludes audit logs.
+    Platform must block deletion on any positive result, failed request or invalid response.
+servers:
+  - url: http://localhost:5689
+    description: Dispatch service
+  - url: http://localhost:5690
+    description: Booking service
+  - url: http://localhost:5692
+    description: Reporting service
+security:
+  - bearerAuth: []
+paths:
+  /internal/v1/properties/{propertyId}/references:
+    get:
+      operationId: getPropertyReferences
+      summary: Check whether the service owns records referencing a property
+      description: >-
+        Returns true as soon as a business reference is found; returns false only after checking
+        every applicable collection. This checks references, not property existence. It does not
+        disclose record identifiers, details or counts. Dispatch checks drivers, vehicles, coupons,
+        driver offers, inspections, vehicle issues, incidents and legacy shift property fields.
+        Booking checks property quotas, overrides, qualifications, cross-border approvals, trips,
+        guests, console notifications and live locations. Reporting checks propertyScopes on
+        schedules and exports, plus filter.propertyId on exports and report rows.
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          description: Property identifier already validated by Platform
+          schema: { type: string, example: COD }
+      responses:
+        '200':
+          description: Reference lookup completed (code 20000)
+          headers: { X-Trace-Id: { $ref: './lms-portal-s1-s2.v1.yaml#/components/headers/TraceId' } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: './lms-portal-s1-s2.v1.yaml#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        type: boolean
+                        description: Whether any business record references the property
+                        example: true
+        '401': { $ref: './lms-portal-s1-s2.v1.yaml#/components/responses/Unauthorized' }
+        '403': { $ref: './lms-portal-s1-s2.v1.yaml#/components/responses/Forbidden' }
+        '404': { $ref: './lms-portal-s1-s2.v1.yaml#/components/responses/NotFound' }
+        '500': { $ref: './lms-portal-s1-s2.v1.yaml#/components/responses/InternalError' }
+        '503': { $ref: './lms-portal-s1-s2.v1.yaml#/components/responses/ServiceUnavailable' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }

@@ -1,0 +1,801 @@
+openapi: 3.0.3
+info:
+  title: LMS Customer API (v1, Phases 1-2)
+  version: 1.0.0
+  description: >-
+    Backend capabilities behind the customer app Home and Bookings screens: own summary and home journey (C01), service catalog (C02),
+    location search (C03) and location detail with coordinates (C03b), ride options (C04), self-service booking (C05), own bookings list / detail (C06/C07) and cancellation
+    (C08/C09). Served by Booking behind the gateway. Paths, DTOs and codes follow
+    docs/design/LMS-plan-20261011-04-driver-customer-web-phases.md section 7; application codes are registered in
+    docs/api/error-codes.md (no new codes). Every response uses the unified envelope and carries traceId (body + X-Trace-Id header).
+    Every endpoint requires an LMS local access token (security scheme lmsAppBearer) issued by the customer login entry
+    POST /api/platform/customer/v1/logins; Keycloak is not involved and the principal type is fixed to CUSTOMER by the entry.
+    The guest id is NEVER read from the path, query or body, only from the token subject (guestId), which Booking confirms still
+    exists. A staff token (a different issuer) is answered with 401 / 40100 and a driver token with 403 / 40300. Every operation can answer
+    503 / 50300 when the authorization source or Platform's catalog is unavailable - an unavailable source is never reported as an
+    empty result or a default rule. All times are ISO 8601 UTC (Z). Reads are not cacheable (Cache-Control no-store). Order facts live
+    only on the server: a created order is the same persisted record for every later read. Points are reference-only, nothing is
+    settled. Re-booking reuses C02-C05; no "copy and confirm" endpoint exists. Custom (free-text) addresses are NOT supported yet:
+    only catalog location ids are accepted. Phase 2 adds account profile (C2-01/C2-02), location favorites (C2-05/C2-06), reviews (C2-07..C2-09) and preferences (C2-10/C2-11). Registration and phone change (C2-03/C2-04, A2-01..A2-04) are NOT part of this contract yet: they need a verification channel and an initial-password source that are still business decisions (Q2-03 / Q2-04).
+servers:
+  - url: http://localhost:5088
+    description: API gateway (Development)
+tags:
+  - name: Customer Authentication
+  - name: Customer
+  - name: Customer Catalog
+  - name: Customer Trips
+  - name: Customer Account
+  - name: Customer Favorites
+  - name: Customer Reviews
+security:
+  - lmsAppBearer: []
+paths:
+  /api/booking/customer/v1/me:
+    get:
+      tags: [Customer]
+      operationId: getCustomerSelf
+      summary: C01 Own summary, booking capability and current journey (permission customer-bookings:read)
+      description: >-
+        canBook is false with bookingBlockReason when the customer has no property assigned, the tier is not eligible for self-service,
+        or an active customer restriction exists. currentTrip is chosen by a fixed rule over the caller's own orders: in-progress
+        (en route / arrived / on board) first, otherwise the nearest upcoming order (starting up to 2 hours before now).
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerSummaryView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/service-offerings:
+    get:
+      tags: [Customer Catalog]
+      operationId: listCustomerServiceOfferings
+      summary: C02 Cities, service products and their bookability (permission customer-bookings:read)
+      description: >-
+        A product that cannot be booked is still listed with isBookable=false and a reason: either a product-level reason
+        (such as PARTY_CAPACITY_NOT_CONFIGURED before the party capacity model was decided) or a customer-level reason
+        PROPERTY_UNASSIGNED / TIER_NOT_ELIGIBLE / RESTRICTED. The three products are currently all bookable.
+        The three products are not one-to-one with the fulfilment service type; the mapping is server configuration.
+        rules mirrors Platform's self-booking rules; isAsapAvailable tells whether immediate pickup may be requested (default false).
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/ServiceOfferingsView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/locations:
+    get:
+      tags: [Customer Catalog]
+      operationId: listCustomerLocations
+      summary: C03 Search selectable catalog locations (permission customer-bookings:read)
+      description: >-
+        Only active Platform catalog locations and only customer-visible fields (no contact person, phone or geofence). The request is a read-only
+        proxy; nothing is created. Free-text addresses are not resolved by this API (no constrained address contract yet).
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: name. Default name.', schema: { type: string } }
+        - { name: region, in: query, required: false, description: 'Location region filter.', schema: { type: string, enum: [MACAU_PENINSULA, COTAI, HONG_KONG, AIRPORT] } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/CustomerLocationView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/locations/{locationId}:
+    parameters:
+      - { name: locationId, in: path, required: true, description: 'Catalog location id; the order route.pickupLocationId / dropoffLocationId can be used directly.', schema: { type: string } }
+    get:
+      tags: [Customer Catalog]
+      operationId: getCustomerLocation
+      summary: C03b Location detail with map coordinates (permission customer-bookings:read)
+      description: >-
+        Serves the order-detail map. Same visibility as C03: only an active Platform catalog location is returned, with customer-visible fields only (no contact
+        person, phone or geofence). coordinates are read live from the Platform location catalog (the authoritative source) - they are never derived from the
+        address and are not stored on the order, so a catalog edit is reflected here. A location that does not exist, or that has been deactivated (including after the
+        order was placed), answers 404 / 40400 and no coordinates are returned; the same applies to a deleted location. Consequently the map of an old order whose
+        location is now inactive cannot be drawn from this endpoint. coordinates is omitted when the catalog has no usable value (degrees, latitude first; the
+        catalog coordinate reference system is not confirmed yet - data model Q02 - and no conversion is applied). Responses are not cacheable.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerLocationDetailView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/ride-options:
+    get:
+      tags: [Customer Catalog]
+      operationId: listCustomerRideOptions
+      summary: C04 Validate a route and return the product vehicle class (permission customer-bookings:read)
+      description: >-
+        Read-only: writes no qualification record, approval or quota. Uses the same route and vehicle logic as booking creation. 400 for
+        an unknown / inactive location or the same pickup and dropoff; 422 when the route is not served by the product (LOCAL products need both ends
+        in one city, CROSS_BORDER_TRANSFER needs one end in each). Only the vehicle class configured for the selected product is returned, including its eligibility, capacity and reference points.
+      parameters:
+        - { name: productCode, in: query, required: true, schema: { type: string, enum: [BUSINESS_SEDAN, LIMOUSINE, PARTY, CROSS_BORDER_TRANSFER] } }
+        - { name: pickupLocationId, in: query, required: true, schema: { type: string } }
+        - { name: dropoffLocationId, in: query, required: true, schema: { type: string } }
+        - { name: passengers, in: query, required: false, description: 'Party size used to judge capacity. Default 1.', schema: { type: integer, minimum: 1, maximum: 50, default: 1 } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/RideOptionsView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/trips:
+    get:
+      tags: [Customer Trips]
+      operationId: listCustomerTrips
+      summary: C06 Own bookings by group (permission customer-bookings:read)
+      description: >-
+        group=ACTIVE is every non-terminal order (PENDING, CONFIRMED, DRIVER_ASSIGNED, DRIVER_EN_ROUTE, ARRIVED_AT_PICKUP, IN_PROGRESS), not only the backend
+        IN_PROGRESS; COMPLETED and CANCELLED are terminal. Ownership follows the beneficiary guest (guest.guestId), so an order a staff member booked for the
+        customer is included. Default sort -createdAt,tripId (order placed time); createdAt is never replaced by the planned pickup time. Empty is a real empty list.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - { name: sort, in: query, required: false, description: 'Allowed: createdAt, pickupAt, closedAt, tripReference, tripId. Default -createdAt,tripId.', schema: { type: string } }
+        - { name: group, in: query, required: false, schema: { type: string, enum: [ACTIVE, COMPLETED, CANCELLED], default: ACTIVE } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/CustomerTripSummaryView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    post:
+      tags: [Customer Trips]
+      operationId: createCustomerTrip
+      summary: C05 Self-service booking (permission customer-bookings:write)
+      description: >-
+        Requires Idempotency-Key (the same key and content replays the same order, still 201). The customer comes from the token subject. Everything is re-evaluated at
+        submit time, first failure wins: unknown product (400) / product not enabled (422 productCode) -> customer cannot book (422 guest: PROPERTY_UNASSIGNED,
+        TIER_NOT_ELIGIBLE, RESTRICTED) -> time window (422 pickupAt / pickupMode: ASAP disabled, lead time hours, advance days, daily active orders; pickupAt is
+        required unless ASAP) -> route (400 unknown / inactive / identical locations, 422 route not served) -> vehicle (422 vehicleClass tier not entitled,
+        422 passengers capacity, 400 luggage) -> property quota (422 when AUTO_REJECT; WAITLIST does not block). Every accepted order, including
+        cross-border orders, is created as CONFIRMED. luggage defaults to 0 (not declared) because the prototype does not collect it. Nothing is written to staff preferences
+        and no qualification record is registered.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateCustomerTripRequest' } } } }
+      responses:
+        '201': { description: Created (also for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerTripView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/trips/{tripId}:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Customer Trips]
+      operationId: getCustomerTrip
+      summary: C07 Own booking detail with timeline, driver and vehicle summary (permission customer-bookings:read)
+      description: >-
+        driver is omitted (assignmentStatus UNASSIGNED) until a driver accepted - no fixed driver name or plate is ever returned. driver.canContact is true
+        only for an assigned, active trip; the phone number is retrieved separately through the ownership-checked driver-contacts resource. Live location and mileage are phase 3. rebookInput is only present for terminal orders and carries
+        only locations, party size, product, vehicle class and notes - never eligibility, entitlements, vehicle assignment, approvals or an idempotency key.
+        Someone else's order is 404.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerTripView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/trips/{tripId}/driver-contacts:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string, example: trip_01a1665a3b57717ea57b76ba68597dd2, description: Trip identifier. } }
+    get:
+      tags: [Customer Trips]
+      operationId: getCustomerTripDriverContact
+      summary: Get the assigned driver's phone for an active trip owned by the customer
+      description: |-
+        The customer token must own the trip. Unassigned, completed, cancelled, missing, and other customers' trips return 404. The response is never cached. Booking resolves the driver's current phone through an internal, scoped service call. WINSON-DEVIATION (client preview only): development builds or an explicit VITE_USE_MOCK_DRIVER_PHONE flag may substitute a temporary demo number without calling this API; production builds use this endpoint.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' }, Cache-Control: { description: No-store for contact data., schema: { type: string, example: no-store } } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerDriverContactView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/trips/{tripId}/cancellation-policy:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Customer Trips]
+      operationId: getCustomerTripCancellationPolicy
+      summary: C08 Cancellation capability and policy (permission customer-bookings:read)
+      description: >-
+        canCancel follows the server state: in-progress and terminal orders cannot be cancelled (STATE_NOT_CANCELLABLE); an optional deployment cutoff
+        (SelfService:CancellationCutoffMinutes, default off) adds WITHIN_CANCELLATION_CUTOFF. policyReference is the property's reference text; fees are not computed.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerCancellationPolicyView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/trips/{tripId}/cancellations:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Customer Trips]
+      operationId: createCustomerTripCancellation
+      summary: C09 Cancel an own booking (permission customer-bookings:write)
+      description: >-
+        Requires Idempotency-Key. The reason code is mapped by the server (SelfService:CancellationReasonCode, validated against
+        Platform's reason list) - the client only attaches comments. An order that is in progress or terminal, or inside the optional cutoff, answers 409.
+        Cancelling an assigned order keeps the assignment: the order moves to that driver's cancelled history.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: false, content: { application/json: { schema: { $ref: '#/components/schemas/CancelCustomerTripRequest' } } } }
+      responses:
+        '200': { description: Cancelled (also for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerTripView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/customer/v1/logins:
+    post:
+      tags: [Customer Authentication]
+      operationId: createCustomerLogin
+      summary: Customer login with the LMS local identity service (anonymous)
+      description: >-
+        Signs the customer in with the credentials stored on the customer record owned by Booking; Keycloak is not involved. The principal
+        type is fixed to CUSTOMER by this entry and the body cannot choose it. Unknown or duplicated phone number, wrong password, no password set
+        all answer the same 401 / 40100 and no token is issued; a record without a password can never
+        log in. After 5 consecutive failures for one phone number within 15 minutes the entry answers 429 / 42900 with
+        Retry-After. 503 / 50300 when the signing key is not configured or Booking cannot be reached (never a fallback login).
+        There is no registration, activation or password-reset endpoint in this phase. Responses are never cached (Cache-Control no-store).
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AppLoginRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/AppSession' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/customer/v1/token-refreshes:
+    post:
+      tags: [Customer Authentication]
+      operationId: createCustomerTokenRefresh
+      summary: Exchange a customer refresh token for a new access token and refresh token (anonymous)
+      description: >-
+        The refresh token travels in the JSON body (no cookie). It is single-use: every success returns a new refresh token that
+        keeps the original 7-day absolute expiry (rotation never extends it). A CUSTOMER refresh token is rejected here only when it
+        belongs to the other identity; presenting an already-used refresh token answers 401 / 40100 and revokes the whole refresh
+        chain. The owning service (Booking) confirms the record is still eligible before rotation.
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AppRefreshRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/AppSession' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/platform/customer/v1/logouts:
+    post:
+      tags: [Customer Authentication]
+      operationId: createCustomerLogout
+      summary: Log out by revoking the refresh chain of the submitted refresh token (anonymous)
+      description: >-
+        Idempotent: an unknown, other-identity or already revoked refresh token also answers 204. Access tokens already issued stay
+        valid until they expire (at most 15 minutes); there is no immediate access-token revocation in this phase.
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AppLogoutRequest' } } } }
+      responses:
+        '204': { description: Logged out; no body. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/booking/customer/v1/me/profile:
+    get:
+      tags: [Customer Account]
+      operationId: getCustomerProfile
+      summary: C2-01 Own account profile and membership summary (permission customer-profile:read)
+      description: >-
+        Independent of booking eligibility: it does not read Platform rules or customer restrictions, so it keeps working when those sources are down.
+        memberId, tierCode and pointsBalance come from the member snapshot and are read-only; pointsBalance is omitted when there is no trusted value and is never
+        presented as a live balance. The login phone is read-only and masked; isPhoneChangeAvailable is false until the phone-change verification flow (Q2-03) exists.
+        The name shown is the locally saved name when present, otherwise the snapshot name. Not cacheable.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerAccountView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    patch:
+      tags: [Customer Account]
+      operationId: updateCustomerProfile
+      summary: C2-02 Change own name / email (permission customer-profile:write)
+      description: >-
+        Writes only the local supplementary profile (collection customer_account_profiles), which snapshot imports never overwrite. Membership fields, property and the
+        login phone cannot be changed here (such fields are rejected as unknown, 400). Optional X-Expected-Version: when present it must equal the current version
+        (0 when never saved), otherwise 409. A new name affects the account display only, not the guest name snapshot stored in existing orders.
+      parameters:
+        - { name: X-Expected-Version, in: header, required: false, schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateCustomerAccountRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerAccountView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/location-favorites/{usage}:
+    parameters:
+      - { name: usage, in: path, required: true, schema: { type: string, enum: [PICKUP, DROPOFF] } }
+    get:
+      tags: [Customer Favorites]
+      operationId: getCustomerLocationFavorites
+      summary: C2-05 Favorites of one group (permission customer-favorites:read)
+      description: >-
+        Each item carries isAvailable: false when the location has since been deactivated or removed (the favorite is kept, never silently dropped); the field is omitted
+        when the catalog cannot be read right now. A never-saved group is an empty list with version 0 (nothing is written). Not cacheable.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/LocationFavoritesView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    put:
+      tags: [Customer Favorites]
+      operationId: replaceCustomerLocationFavorites
+      summary: C2-06 Replace one favorites group (permission customer-favorites:write)
+      description: >-
+        Replaces the whole group (an empty array clears it); the other group is untouched. Every item must be an active catalog location - free text cannot stand in for a
+        location id, and no public location is ever created (constrained custom-address resolution does not exist yet, Q2-05). Duplicates inside one group answer 400; the
+        same location may be in both groups. The group size is capped by deployment configuration (Favorites:MaxItemsPerUsage, default 50 - a safety bound, not a business
+        rule). Optional X-Expected-Version: when present it must equal the current version (0 when never saved), otherwise 409. Saving identical content writes nothing.
+        Favorites are kept in customer_location_favorites, completely apart from staff preferences. Creating an order still re-validates the location and the route.
+      parameters:
+        - { name: X-Expected-Version, in: header, required: false, schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceLocationFavoritesRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/LocationFavoritesView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/reviewable-trips:
+    get:
+      tags: [Customer Reviews]
+      operationId: listCustomerReviewableTrips
+      summary: C2-07 Own completed trips with their review summary (permission customer-reviews:read)
+      description: >-
+        Server-side paging over the caller's own COMPLETED trips (the beneficiary guest, so trips a staff member booked for the customer count). Trips without a review carry
+        no review. No review deadline is enforced (Q2-06 pending). Default sort -closedAt,-pickupAt,tripId. Not cacheable.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - { name: sort, in: query, required: false, description: 'Allowed: createdAt, pickupAt, closedAt, tripReference, tripId. Default -closedAt,-pickupAt,tripId.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/ReviewableTripView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/trips/{tripId}/review:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Customer Reviews]
+      operationId: getCustomerTripReview
+      summary: C2-08 Own review of a trip (permission customer-reviews:read)
+      description: A trip that is not the caller's, does not exist, or has no review yet answers 404.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/TripReviewView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    put:
+      tags: [Customer Reviews]
+      operationId: upsertCustomerTripReview
+      summary: C2-09 Create or edit the review of a trip (permission customer-reviews:write)
+      description: >-
+        Full write of rating (1-5) and comments (trimmed, at most 1000 Unicode characters). The trip must be the caller's own and COMPLETED (not own: 404; not completed: 422).
+        First save answers 201 with version 1. Saving the same content again returns the stored review (idempotent). Editing an existing review requires X-Expected-Version;
+        a missing or stale version answers 409. A review never changes the trip, points or any driver rating; the driver recorded with it is the trip's assignment snapshot.
+      parameters:
+        - { name: X-Expected-Version, in: header, required: false, description: 'Required when editing an existing review with different content.', schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertTripReviewRequest' } } } }
+      responses:
+        '200': { description: Edited (or identical content re-sent), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/TripReviewView' } } } ] } } } }
+        '201': { description: Created, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/TripReviewView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/customer/v1/me/preferences:
+    get:
+      tags: [Customer Account]
+      operationId: getCustomerPreferences
+      summary: C2-10 Own language and notification preferences (permission customer-preferences:read)
+      description: >-
+        A never-saved customer reads the contract default (EN, push off, version 0) - nothing is written. delivery.isPushDeliveryAvailable states whether notifications can actually
+        be delivered (false until real-time push exists, phase 3). Not cacheable.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerPreferencesView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    patch:
+      tags: [Customer Account]
+      operationId: updateCustomerPreferences
+      summary: C2-11 Change own preferences (permission customer-preferences:write)
+      description: >-
+        Declared fields only (language, isPushNotificationsEnabled), at least one. The push switch is the user's wish: saving it does not mean a device subscribed or anything was
+        delivered, and it never touches points or existing orders. Booking confirmation language: an explicit confirmationLanguage on C05 wins, otherwise this language, otherwise EN;
+        existing orders are not rewritten. Optional X-Expected-Version: when present it must equal the current version (0 when never saved), otherwise 409.
+      parameters:
+        - { name: X-Expected-Version, in: header, required: false, schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateCustomerPreferencesRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/CustomerPreferencesView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+components:
+  securitySchemes:
+    lmsAppBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'Driver / customer access token issued by the LMS local identity service (RS256, audience lms-app-api).' }
+  headers:
+    TraceId: { description: 'Correlation id, identical to the body traceId.', schema: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 } }
+  parameters:
+    Page: { name: page, in: query, required: false, description: 'Page number, >= 1. Default 1.', schema: { type: integer, minimum: 1, default: 1 } }
+    PageSize: { name: pageSize, in: query, required: false, description: 'Page size. Default 10.', schema: { type: integer, enum: [10, 20, 50], default: 10 } }
+    Search: { name: search, in: query, required: false, description: 'Case-insensitive contains match on the visible columns; blank means no filter.', schema: { type: string } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, description: 'Non-blank key; the same key with different content answers 409 / 40900.', schema: { type: string } }
+  responses:
+    BadRequest:
+      description: 'Malformed request (40000) or validation failed (40001).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Unauthorized:
+      description: 'Not authenticated (40100) or token expired (40101).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Forbidden:
+      description: 'Insufficient permission (40300): the LMS local token belongs to another identity (for example a driver), or its subject no longer maps to a customer record.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    NotFound:
+      description: 'Resource not found (40400), or not owned by the caller.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Conflict:
+      description: 'State conflict (40900): version mismatch, an order that can no longer be cancelled, or an idempotency key reused with different content.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    UnprocessableEntity:
+      description: 'Business rule rejected (42200): product, customer eligibility, time window, route, vehicle or quota; errors[] names the failing fields.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    TooManyRequests:
+      description: 'Too many consecutive failed logins for this phone number (42900). Wait Retry-After seconds.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' }, Retry-After: { description: 'Seconds to wait.', schema: { type: integer } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    InternalError:
+      description: 'Internal server error (50000).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    ServiceUnavailable:
+      description: 'Service unavailable (50300): the authorization source, Platform catalog / rules, guest read model or quota source cannot give a real answer.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  schemas:
+    AppLoginRequest:
+      type: object
+      required: [phone, password]
+      additionalProperties: false
+      description: Phone + password for the customer entry. role, principalType, customerId, guestId, identityProvider and the former loginId are not accepted. Login does not check points, play verification, free-ride entitlement or quota; those stay in booking.
+      properties:
+        phone: { type: string, description: 'Full phone number with country / region code. Spaces, hyphens and parentheses are ignored; must equal guests.phone after the same normalisation.', example: '+85361234567' }
+        password: { type: string, format: password, description: 'Plain text, used only for this check; never stored or logged and not trimmed.' }
+    AppRefreshRequest:
+      type: object
+      required: [refreshToken]
+      additionalProperties: false
+      properties:
+        refreshToken: { type: string, description: 'Refresh token returned by login or the previous refresh.' }
+    AppLogoutRequest:
+      type: object
+      required: [refreshToken]
+      additionalProperties: false
+      properties:
+        refreshToken: { type: string, description: 'Refresh token whose refresh chain is revoked.' }
+    AppSession:
+      type: object
+      required: [accessToken, tokenType, expiresIn, refreshToken, refreshExpiresIn, principalType]
+      description: Tokens signed by the LMS local identity service (RS256). Send accessToken as Authorization Bearer.
+      properties:
+        accessToken: { type: string, description: 'JWT, 15 minutes by default. Claims: sub (customer id), principalType, roles, scope, sid, jti, iss, aud (lms-app-api).' }
+        tokenType: { type: string, enum: [Bearer] }
+        expiresIn: { type: integer, example: 900, description: 'Access token lifetime in seconds.' }
+        refreshToken: { type: string, description: 'Opaque, single-use.' }
+        refreshExpiresIn: { type: integer, example: 604800, description: 'Remaining refresh lifetime in seconds (7-day absolute, not extended by rotation).' }
+        principalType: { type: string, enum: [CUSTOMER] }
+    SuccessEnvelope:
+      type: object
+      required: [code, message, traceId]
+      properties:
+        code: { type: integer, example: 20000 }
+        message: { type: string, example: success }
+        data: { nullable: true }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+        traceId: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+    PageMeta:
+      type: object
+      required: [traceId]
+      properties:
+        traceId: { type: string }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    Pagination:
+      type: object
+      required: [currentPage, pageSize, totalItems, totalPages]
+      properties:
+        currentPage: { type: integer, example: 1 }
+        pageSize: { type: integer, example: 10 }
+        totalItems: { type: integer, example: 42 }
+        totalPages: { type: integer, example: 5 }
+    ErrorEnvelope:
+      type: object
+      required: [code, message, errors, traceId]
+      properties:
+        code: { type: integer, example: 42200 }
+        message: { type: string, example: Business rule rejected }
+        errors: { type: array, items: { type: object, required: [field, message], properties: { field: { type: string }, message: { type: string } } } }
+        traceId: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+    TripStatus: { type: string, enum: [PENDING, CONFIRMED, DRIVER_ASSIGNED, DRIVER_EN_ROUTE, ARRIVED_AT_PICKUP, IN_PROGRESS, COMPLETED, CANCELLED] }
+    TripStage: { type: string, enum: [PENDING, CONFIRMED, DRIVER_ASSIGNED, DRIVER_EN_ROUTE, ARRIVED_AT_PICKUP, PASSENGER_ON_BOARD, IN_TRANSIT, ARRIVED_AT_DESTINATION, COMPLETED, CANCELLED], description: 'Refines IN_PROGRESS; the customer-facing simplified status maps from this.' }
+    ProductCode: { type: string, enum: [BUSINESS_SEDAN, LIMOUSINE, PARTY, CROSS_BORDER_TRANSFER] }
+    VehicleClass: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH] }
+    TripRoute:
+      type: object
+      required: [pickupLocationId, pickupName, dropoffLocationId, dropoffName, isCrossBorder]
+      properties: { pickupLocationId: { type: string }, pickupName: { type: string }, dropoffLocationId: { type: string }, dropoffName: { type: string }, isCrossBorder: { type: boolean } }
+    CustomerTripSummaryView:
+      type: object
+      required: [tripId, tripReference, serviceType, status, group, stage, vehicleClass, passengers, route, pickupAt, createdAt, canCancel, version]
+      properties:
+        tripId: { type: string }
+        tripReference: { type: string }
+        productCode: { $ref: '#/components/schemas/ProductCode' }
+        serviceType: { type: string, enum: [ONE_WAY, AIRPORT_PICKUP, AIRPORT_DROPOFF, INTER_PROPERTY] }
+        status: { $ref: '#/components/schemas/TripStatus' }
+        group: { type: string, enum: [ACTIVE, COMPLETED, CANCELLED] }
+        stage: { $ref: '#/components/schemas/TripStage' }
+        vehicleClass: { $ref: '#/components/schemas/VehicleClass' }
+        passengers: { type: integer }
+        route: { $ref: '#/components/schemas/TripRoute' }
+        pickupAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time, description: 'Order placed time.' }
+        canCancel: { type: boolean }
+        version: { type: integer, format: int64 }
+    CustomerTripView:
+      type: object
+      required: [summary, assignmentStatus, timeline, points]
+      properties:
+        summary: { $ref: '#/components/schemas/CustomerTripSummaryView' }
+        specialRequests: { type: string }
+        assignmentStatus: { type: string, enum: [UNASSIGNED, ASSIGNED] }
+        driver: { type: object, required: [name, vehicleLabel, canContact], properties: { name: { type: string }, vehicleLabel: { type: string }, canContact: { type: boolean, description: True only for an active assigned trip., example: true } } }
+        timeline: { type: array, items: { type: object, required: [type, status, occurredAt], properties: { type: { type: string, enum: [DRIVER_ASSIGNED, STARTED_EN_ROUTE, ARRIVED_AT_PICKUP, PASSENGER_BOARDED, IN_TRANSIT, ARRIVED_AT_DESTINATION, COMPLETED, CANCELLED] }, status: { $ref: '#/components/schemas/TripStatus' }, occurredAt: { type: string, format: date-time } } } }
+        points: { type: object, required: [required, state], properties: { required: { type: integer, format: int64 }, state: { type: string, enum: [RESERVED, REDEEMED, RETURNED, NONE] } }, description: 'Reference only - LMS does not settle points.' }
+        cancellation: { type: object, required: [reasonCode, cancelledAt], properties: { reasonCode: { type: string }, cancelledAt: { type: string, format: date-time } } }
+        rebookInput: { type: object, required: [pickupLocationId, dropoffLocationId, vehicleClass, passengers], properties: { productCode: { $ref: '#/components/schemas/ProductCode' }, pickupLocationId: { type: string }, dropoffLocationId: { type: string }, vehicleClass: { $ref: '#/components/schemas/VehicleClass' }, passengers: { type: integer }, specialRequests: { type: string } } }
+    CustomerDriverContactView:
+      type: object
+      description: Current phone number of the assigned driver, available only to the customer who owns an active trip.
+      example: { phoneNumber: '+85366182400' }
+      required: [phoneNumber]
+      properties:
+        phoneNumber: { type: string, description: E.164 phone number for the device dialer., example: '+85366182400' }
+    CustomerCancellationPolicyView:
+      type: object
+      required: [tripId, tripReference, status, canCancel, reasonCode]
+      properties:
+        tripId: { type: string }
+        tripReference: { type: string }
+        status: { $ref: '#/components/schemas/TripStatus' }
+        canCancel: { type: boolean }
+        blockedReason: { type: string, enum: [STATE_NOT_CANCELLABLE, WITHIN_CANCELLATION_CUTOFF] }
+        policyReference: { type: string }
+        reasonCode: { type: string, description: 'Server-mapped cancellation reason; the client does not submit it.' }
+    CustomerSummaryView:
+      type: object
+      required: [guestId, name, tierCode, canBook]
+      properties:
+        guestId: { type: string }
+        name: { type: string }
+        tierCode: { type: string }
+        memberId: { type: string }
+        propertyId: { type: string }
+        preferredLanguage: { type: string }
+        canBook: { type: boolean }
+        bookingBlockReason: { type: string, enum: [PROPERTY_UNASSIGNED, TIER_NOT_ELIGIBLE, RESTRICTED] }
+        currentTrip: { $ref: '#/components/schemas/CustomerTripSummaryView' }
+    ServiceOfferingsView:
+      type: object
+      required: [cities, products, rules, isAsapAvailable]
+      properties:
+        cities: { type: array, items: { type: object, required: [cityCode, name, regions], properties: { cityCode: { type: string, enum: [MACAU, HONG_KONG] }, name: { type: string }, regions: { type: array, items: { type: string } } } } }
+        products: { type: array, items: { type: object, required: [productCode, name, description, routeScope, isBookable], properties: { productCode: { $ref: '#/components/schemas/ProductCode' }, name: { type: string }, description: { type: string }, routeScope: { type: string, enum: [LOCAL, CROSS_BORDER] }, isBookable: { type: boolean }, unavailableReason: { type: string } } } }
+        rules: { type: object, required: [minimumLeadTimeHours, maximumAdvanceDays, maximumActiveRequestsPerGuestPerDay], properties: { minimumLeadTimeHours: { type: integer }, maximumAdvanceDays: { type: integer }, maximumActiveRequestsPerGuestPerDay: { type: integer } } }
+        isAsapAvailable: { type: boolean }
+    CustomerLocationView:
+      type: object
+      required: [locationId, name, address, cityCode, region, categoryCode, operatingHours]
+      properties:
+        locationId: { type: string }
+        name: { type: string }
+        address: { type: string }
+        cityCode: { type: string, enum: [MACAU, HONG_KONG] }
+        region: { type: string, enum: [MACAU_PENINSULA, COTAI, HONG_KONG, AIRPORT] }
+        categoryCode: { type: string }
+        operatingHours: { type: string }
+    CustomerCoordinates:
+      type: object
+      required: [latitude, longitude]
+      description: 'Map coordinates in degrees (latitude first), copied unchanged from the Platform location catalog; no coordinate-system conversion. The catalog coordinate reference system is not confirmed yet (data model Q02).'
+      properties:
+        latitude: { type: number, format: double, minimum: -90, maximum: 90, example: 22.1496 }
+        longitude: { type: number, format: double, minimum: -180, maximum: 180, example: 113.5915 }
+    CustomerLocationDetailView:
+      type: object
+      required: [locationId, name, address, cityCode, region, categoryCode, operatingHours]
+      description: 'C03 list item fields plus coordinates.'
+      properties:
+        locationId: { type: string, example: location_01a1245df2fe7331a3f131ddefe2116e }
+        name: { type: string, example: Macau International Airport }
+        address: { type: string }
+        cityCode: { type: string, enum: [MACAU, HONG_KONG] }
+        region: { type: string, enum: [MACAU_PENINSULA, COTAI, HONG_KONG, AIRPORT] }
+        categoryCode: { type: string }
+        operatingHours: { type: string }
+        coordinates: { $ref: '#/components/schemas/CustomerCoordinates' }
+    RideOptionsView:
+      type: object
+      required: [route, vehicles]
+      properties:
+        route: { type: object, required: [pickupLocationId, pickupName, dropoffLocationId, dropoffName, isCrossBorder, pickupCityCode, dropoffCityCode], properties: { pickupLocationId: { type: string }, pickupName: { type: string }, dropoffLocationId: { type: string }, dropoffName: { type: string }, isCrossBorder: { type: boolean }, pickupCityCode: { type: string, enum: [MACAU, HONG_KONG] }, dropoffCityCode: { type: string, enum: [MACAU, HONG_KONG] } } }
+        vehicles: { type: array, items: { type: object, required: [vehicleClass, maxPassengers, maxLuggage, pointsRequired, isEligible], properties: { vehicleClass: { $ref: '#/components/schemas/VehicleClass' }, maxPassengers: { type: integer }, maxLuggage: { type: integer }, pointsRequired: { type: integer, format: int64, description: 'Reference only.' }, isEligible: { type: boolean }, ineligibleReason: { type: string, enum: [TIER_NOT_ENTITLED, PASSENGERS_EXCEED_CAPACITY] } } } }
+    CreateCustomerTripRequest:
+      type: object
+      required: [productCode, pickupLocationId, dropoffLocationId, pickupMode, passengers]
+      additionalProperties: false
+      properties:
+        productCode: { $ref: '#/components/schemas/ProductCode' }
+        pickupLocationId: { type: string }
+        dropoffLocationId: { type: string }
+        pickupMode: { type: string, enum: [ASAP, SCHEDULED] }
+        pickupAt: { type: string, format: date-time, description: 'ISO 8601 UTC ending with Z; omit when pickupMode is ASAP.' }
+        vehicleClass: { allOf: [ { $ref: '#/components/schemas/VehicleClass' } ], description: 'Optional. Derived from productCode; an explicitly supplied value must match or returns 400 / 40001.' }
+        passengers: { type: integer, minimum: 1 }
+        luggage: { type: integer, minimum: 0, description: 'Defaults to 0 (not declared).' }
+        specialRequests: { type: string, maxLength: 500 }
+        confirmationLanguage: { type: string, default: EN }
+    CancelCustomerTripRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        comments: { type: string, maxLength: 500 }
+    CustomerAccountView:
+      type: object
+      required: [guestId, name, nameSource, isPhoneChangeAvailable, memberId, tierCode, membershipSource, version]
+      properties:
+        guestId: { type: string }
+        name: { type: string }
+        nameSource: { type: string, enum: [LOCAL, MEMBER_SNAPSHOT] }
+        email: { type: string }
+        phoneMasked: { type: string, example: '+853 6***4829' }
+        isPhoneChangeAvailable: { type: boolean, description: 'False until the verified phone-change flow exists.' }
+        memberId: { type: string }
+        tierCode: { type: string }
+        pointsBalance: { type: integer, format: int64, description: 'Snapshot value, not a live balance; omitted when there is no trusted value.' }
+        membershipSource: { type: string, enum: [MEMBER_SNAPSHOT] }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64, description: 'Version of the local supplementary profile; 0 when never saved.' }
+    UpdateCustomerAccountRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, maxLength: 100, description: 'Not blank; cannot be cleared.' }
+        email: { type: string, format: email, nullable: true, maxLength: 254, description: 'Explicit null or blank clears the e-mail.' }
+    CustomerPreferencesView:
+      type: object
+      required: [language, isPushNotificationsEnabled, delivery, version]
+      properties:
+        language: { type: string, enum: [EN, ZH_HANT, ZH_HANS] }
+        isPushNotificationsEnabled: { type: boolean, description: 'The user wish only; not a device subscription and not a delivery.' }
+        delivery: { type: object, required: [isPushDeliveryAvailable], properties: { isPushDeliveryAvailable: { type: boolean } } }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64, description: '0 when never saved.' }
+    UpdateCustomerPreferencesRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        language: { type: string, enum: [EN, ZH_HANT, ZH_HANS] }
+        isPushNotificationsEnabled: { type: boolean }
+    LocationFavoritesView:
+      type: object
+      required: [usage, items, version]
+      properties:
+        usage: { type: string, enum: [PICKUP, DROPOFF] }
+        items: { type: array, items: { type: object, required: [locationId, name, region], properties: { locationId: { type: string }, name: { type: string, description: 'Name snapshot at save time.' }, region: { type: string }, isAvailable: { type: boolean, description: 'False = deactivated / removed since; omitted = catalog unreadable now.' } } } }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64, description: '0 when never saved.' }
+    ReplaceLocationFavoritesRequest:
+      type: object
+      required: [items]
+      additionalProperties: false
+      properties:
+        items: { type: array, items: { type: object, required: [locationId], additionalProperties: false, properties: { locationId: { type: string, description: 'Platform catalog location id; free text is not accepted.' } } } }
+    TripReviewView:
+      type: object
+      required: [tripId, tripReference, rating, createdAt, updatedAt, version]
+      properties:
+        tripId: { type: string }
+        tripReference: { type: string }
+        rating: { type: integer, minimum: 1, maximum: 5 }
+        comments: { type: string, maxLength: 1000 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64 }
+    ReviewableTripView:
+      type: object
+      required: [tripId, tripReference, pickupName, dropoffName, pickupAt, canReview]
+      properties:
+        tripId: { type: string }
+        tripReference: { type: string }
+        productCode: { type: string, enum: [BUSINESS_SEDAN, LIMOUSINE, PARTY, CROSS_BORDER_TRANSFER] }
+        pickupName: { type: string }
+        dropoffName: { type: string }
+        pickupAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, description: 'Omitted for legacy trips that never recorded an end time.' }
+        canReview: { type: boolean }
+        review: { $ref: '#/components/schemas/TripReviewView' }
+    UpsertTripReviewRequest:
+      type: object
+      required: [rating]
+      additionalProperties: false
+      properties:
+        rating: { type: integer, minimum: 1, maximum: 5 }
+        comments: { type: string, nullable: true, maxLength: 1000 }

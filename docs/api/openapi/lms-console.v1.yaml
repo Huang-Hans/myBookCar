@@ -1,0 +1,1019 @@
+openapi: 3.0.3
+info:
+  title: LMS Customer Service Console API (v1, Phase 1)
+  version: 1.0.0
+  description: >-
+    Console operations for front-desk and concierge staff (BRD chapter 6): guest lookup and
+    qualification check (HA-01/02/06), on-behalf booking lifecycle (HA-03/04/05/10), in-app
+    notification center (HA-11) and staff preferences. Served by Booking; paths, DTOs and codes
+    follow docs/design/LMS-spec-20261010-02-customer-service-console-backend-implementation.md; application codes are
+    registered in docs/api/error-codes.md. Every response uses the unified envelope and carries
+    traceId (body + X-Trace-Id header). Business routes require a Bearer token; Booking resolves
+    the caller against Platform remotely, so EVERY Bearer-protected operation below declares
+    503 / 50300 for the unavailable authorization source. Points are reference-only (LMS never
+    settles money or points). Phase 1 has no real-time feed: trip status advances via the
+    internal endpoint (ops/driver-app), the console polls.
+    The Dispatch tag (/api/dispatch/staff/v1/dispatch-orders) is served by Dispatch: the dispatch queue of customer
+    self-service and console trips, the driver dropdown and offer sending (permissions dispatch:read / dispatch:write).
+servers:
+  - url: http://localhost:5088
+    description: API gateway (Development)
+tags:
+  - name: Guests
+  - name: Trips
+  - name: Notifications
+  - name: Staff
+  - name: Dispatch
+security:
+  - bearerAuth: []
+paths:
+  /api/booking/staff/v1/guests:
+    get:
+      tags: [Guests]
+      operationId: listGuests
+      summary: HA-01/06 Search guests by name / member id / room / phone (permission guests:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: name, memberId, roomNumber, tierCode, guestId. Default name,guestId.', schema: { type: string } }
+        - { name: tier, in: query, required: false, description: 'Exact tier code, e.g. DIAMOND.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/GuestSummaryView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/guests/{guestId}:
+    parameters:
+      - { name: guestId, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [Guests]
+      operationId: updateGuest
+      summary: Update member details (permission guests:write)
+      description: >-
+        Partially updates name, tier, roomNumber and propertyId in the member snapshot.
+        Requires access to both the current and target property. Properties must exist and not be deleted.
+        Member ID, login phone, credentials, points and stay status are not editable.
+        Updates and field-name-only audit records are committed in one transaction.
+        Existing trip snapshots are unchanged. A subsequent upstream member import may replace these details.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateGuestRequest' }
+            example: { name: Alex Morgan, tier: DIAMOND, roomNumber: '1806', propertyId: COD }
+      responses:
+        '200': { description: Updated member, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/GuestSummaryView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    get:
+      tags: [Guests]
+      operationId: getGuestProfile
+      summary: HA-06 Guest profile with live blacklist status and recent trips (permission guests:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/GuestProfileView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/guests/{guestId}/qualification-check:
+    parameters:
+      - { name: guestId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Guests]
+      operationId: checkGuestQualification
+      summary: HA-02 Qualification check; a failed check registers a manager-review record (permission guests:read)
+      parameters:
+        - { name: propertyId, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/QualificationCheckView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/trips:
+    get:
+      tags: [Trips]
+      operationId: listTrips
+      summary: HA-04/05 Paged trips for tracking and history (permission bookings:read)
+      description: search matches tripReference, guest name / room / member id, pickup and drop-off location names, property and status (contains, case-insensitive). It does not match pickup time text. Channel filters are applied before pagination; legacy trips without a channel are treated as CONSOLE.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: tripReference, pickupAt, status, serviceType, vehicleClass, propertyId, createdAt, guest.name, guest.roomNumber, guest.memberId, tripId. Default -pickupAt,tripId.', schema: { type: string } }
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/TripStatus' } }
+        - { name: from, in: query, required: false, description: 'Inclusive pickupAt lower bound (ISO 8601 UTC, ends with Z).', schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, description: 'Exclusive pickupAt upper bound; must be later than from.', schema: { type: string, format: date-time } }
+        - { name: redemptionState, in: query, required: false, description: 'Filter on points.state: RESERVED / REDEEMED / RETURNED / NONE.', schema: { type: string } }
+        - { name: channel, in: query, required: false, description: 'CONSOLE for staff bookings or SELF_SERVICE for customer bookings. Omit to include both.', schema: { type: string, enum: [CONSOLE, SELF_SERVICE] } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/TripView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    post:
+      tags: [Trips]
+      operationId: createTrip
+      summary: HA-01/03 Create a trip on behalf of a guest (permission bookings:write)
+      description: >-
+        Requires Idempotency-Key. bookedBy comes from the token; a bookedBy field in the body is
+        rejected as unknown (40001). Validation chain (first failure wins): malformed (40000/40001),
+        unknown guest or location (404), inactive location (40001), active customer restriction
+        (422 guest), qualification - tier entitlement / play history / vehicle class / points
+        (422 qualification or vehicleClass, registers a manager-review record), capacity
+        (422 passengers/luggage), lead time (422 pickupAt; ASAP exempt), property quota exhausted
+        (422 quota when AUTO_REJECT; WAITLIST does not block), source unavailable (503). New orders are always created as CONFIRMED.
+        CONFIRMED accepts the booking and means awaiting dispatch; it does not confirm a driver.
+        Dispatch creates a driver offer, and DRIVER_ASSIGNED is written only after the driver accepts the offer.
+        When productCode is supplied, product availability and route scope are validated using the same configuration as customer booking.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateTripRequest' } } } }
+      responses:
+        '201': { description: Created (also returned for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/TripView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/trips/{tripId}:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Trips]
+      operationId: getTrip
+      summary: HA-04 Read a trip (permission bookings:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/TripView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    patch:
+      tags: [Trips]
+      operationId: updateTrip
+      summary: HA-10 Modify a trip; only PENDING~DRIVER_ASSIGNED (permission bookings:write)
+      description: >-
+        X-Expected-Version is optional and not compared. Re-runs the full validation chain on the merged trip; a terminal state answers 409 / 40900.
+        modificationReason (GUEST_REQUEST / SCHEDULE_CHANGE) and modificationComments are recorded with the change and returned as lastModification and as a MODIFIED timeline event; they are not trip fields.
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PatchTripRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/TripView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/trips/{tripId}/cancellation:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Trips]
+      operationId: cancelTrip
+      summary: HA-10 Cancel a trip; records reason and returns reserved points (permission bookings:write)
+      description: Requires Idempotency-Key; X-Expected-Version is optional and not compared. reasonCode must come from the uploaded cancellation reasons (CF03); unknown answers 40001. comments is optional (stored as empty). IN_PROGRESS and terminal states answer 409.
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CancelTripRequest' } } } }
+      responses:
+        '200': { description: Success (also for a matching idempotent retry), headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/TripView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/trips/{tripId}/cancellation-policy:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Trips]
+      operationId: getTripCancellationPolicy
+      summary: HA-10 Property policy reference shown before cancelling (permission bookings:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: object, required: [tripReference, propertyId, status], properties: { tripReference: { type: string }, propertyId: { type: string }, status: { $ref: '#/components/schemas/TripStatus' }, policyReference: { type: string, nullable: true } } } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/trips/{tripId}/events:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Trips]
+      operationId: listTripEvents
+      summary: Trip timeline - created, modified, driver assigned / fulfilment and cancelled events as recorded (permission bookings:read)
+      description: >-
+        Only facts that were actually recorded are returned, ascending by occurredAt. CREATED comes from the order creation time and booker; one MODIFIED per modification
+        (with reason and changed field names); driver and cancellation events come from the fulfilment trail. Trips created before an event was recorded simply lack it - nothing is back-filled.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/TripTimelineEventView' } } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/trips/{tripId}/track:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Trips]
+      operationId: getTripTrack
+      summary: Driven track - every location the driver reported after departing, ascending by seq (permission bookings:read)
+      description: >-
+        Points are GCJ-02 and share the shape of the live location pushes (tripLocationUpdated), so the console can merge both by seq.
+        Finished trips keep their track for the retention period (30 days); a trip that never departed returns an empty array.
+        More than 2000 points are evenly sampled (first and last kept) and flagged with sampled=true. Use afterSeq to fetch only newer points after a gap or reconnect.
+      parameters:
+        - { name: afterSeq, in: query, required: false, schema: { type: integer, format: int64, minimum: 0 }, description: Only points with seq greater than this value. }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/TripTrackView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/booking/staff/v1/booking-options:
+    get:
+      tags: [Trips]
+      operationId: getConsoleBookingOptions
+      summary: Booking products and vehicle capacities shared with customer booking (permission bookings:write)
+      description: >-
+        Reads the same product, route-scope, immediate-pickup and vehicle-capacity configuration as customer booking.
+        This catalog does not establish guest eligibility. Preview and creation validate the selected guest and route again.
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' }, Cache-Control: { schema: { type: string, example: no-store } } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/ConsoleBookingOptionsView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/booking-previews:
+    post:
+      tags: [Trips]
+      operationId: createBookingPreview
+      summary: Side-effect-free preview of a console booking before submitting (permission bookings:write)
+      description: >-
+        Runs the same validation chain as createTrip but creates nothing: no order, no quota hold, no points, and no manager-review record (unlike qualification-check).
+        Business-rule failures answer 200 with canSubmit=false and every known reason; unknown guest / location is 404, out-of-scope is 403, an unavailable external source is 503.
+        createTrip re-validates, so a preview is never an authorisation. points.estimatedBalanceAfter is an estimate (LMS records points as references and never settles them).
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/BookingPreviewRequest' } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/BookingPreviewView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/trip-status-summaries:
+    get:
+      tags: [Trips]
+      operationId: getTripStatusSummaries
+      summary: HA-04 Trip counts per status under the common filters; all 8 statuses always present (permission bookings:read)
+      description: >-
+        Accepts the same search / propertyId / from / to / redemptionState as the trip list (identical semantics, no status), so tab counts agree with the filtered list.
+        Without parameters it is the global count within the caller's property scope.
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: redemptionState, in: query, required: false, schema: { type: string } }
+      responses:
+        '200': { description: 'Success; data keys are the 8 status literals (PENDING..CANCELLED)', headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: object, additionalProperties: { type: integer, format: int64 } } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/console-notifications:
+    get:
+      tags: [Notifications]
+      operationId: listConsoleNotifications
+      summary: HA-11 Paged in-app notifications for the current user (permission notifications:read)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: occurredAt, type, summary, tripReference, notificationId. Default -occurredAt,notificationId.', schema: { type: string } }
+        - { name: type, in: query, required: false, schema: { $ref: '#/components/schemas/NotificationType' } }
+        - { name: unread, in: query, required: false, schema: { type: boolean } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/ConsoleNotificationView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/console-notifications/unread-count:
+    get:
+      tags: [Notifications]
+      operationId: countUnreadConsoleNotifications
+      summary: HA-11 Unread badge count for the current user (permission notifications:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: object, required: [unreadCount], properties: { unreadCount: { type: integer, format: int64 } } } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/console-notifications/{notificationId}/read:
+    parameters:
+      - { name: notificationId, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Notifications]
+      operationId: markConsoleNotificationRead
+      summary: HA-11 Mark one notification read; idempotent (permission notifications:read)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: object, properties: { marked: { type: boolean } } } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/console-notifications/read-all:
+    post:
+      tags: [Notifications]
+      operationId: markAllConsoleNotificationsRead
+      summary: HA-11 Mark all notifications of the current user read (permission notifications:read)
+      responses:
+        '200': { description: 'Success; data.markedCount is the number marked', headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: object, properties: { markedCount: { type: integer, format: int64 } } } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/console-settings:
+    get:
+      tags: [Staff]
+      operationId: getStaffConsoleSettings
+      summary: Read the caller's console preferences; defaults when never set (self-service)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/StaffPreferencesView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    put:
+      tags: [Staff]
+      operationId: updateStaffConsoleSettings
+      summary: Update station, default notification channel and confirmation language (self-service)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [station, defaultNotificationChannel], properties: { station: { type: string, minLength: 1, maxLength: 40 }, defaultNotificationChannel: { type: string, enum: [SMS, IN_ROOM_MESSAGE] }, confirmationLanguage: { type: string, default: EN } } } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/StaffPreferencesView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/notification-preferences:
+    put:
+      tags: [Staff]
+      operationId: updateStaffNotificationPreferences
+      summary: Replace the enabled notification types (self-service; subset of the 6 types)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [enabledNotificationTypes], properties: { enabledNotificationTypes: { type: array, minItems: 0, uniqueItems: true, items: { $ref: '#/components/schemas/NotificationType' } } } } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/StaffPreferencesView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/booking/staff/v1/location-favorites:
+    get:
+      tags: [Staff]
+      operationId: getStaffLocationFavorites
+      summary: Read favorites and recent locations (HA-07 quick select; self-service)
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/StaffPreferencesView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    put:
+      tags: [Staff]
+      operationId: updateStaffLocationFavorites
+      summary: Replace location favorites; every id must exist and be active (self-service)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [favoriteLocationIds], properties: { favoriteLocationIds: { type: array, maxItems: 20, uniqueItems: true, items: { type: string } } } } } } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/StaffPreferencesView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/staff/v1/dispatch-orders:
+    get:
+      tags: [Dispatch]
+      operationId: listDispatchOrders
+      summary: Dispatch queue - customer self-service and console trips in one list (permission dispatch:read; served by Dispatch)
+      description: >-
+        Orders are read live from Booking with the caller's own token, so there is no synchronisation lag; offers come from Dispatch.
+        The property scope, filters, total and the summaries endpoint share one definition. dispatchStatus filtering is evaluated on the server.
+        Offer history older than DispatchQueue:OfferLookbackDays no longer affects the status. Booking unavailable answers 503, never an empty queue.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: tripReference, pickupAt, orderStatus, propertyId, createdAt, guest.name, tripId. Default -createdAt,tripId.', schema: { type: string } }
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+        - { name: channel, in: query, required: false, schema: { $ref: '#/components/schemas/DispatchOrderChannel' } }
+        - { name: dispatchStatus, in: query, required: false, schema: { $ref: '#/components/schemas/DispatchStatus' } }
+        - { name: from, in: query, required: false, description: 'Pickup time lower bound (inclusive), ISO 8601 UTC ending with Z.', schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, description: 'Pickup time upper bound (exclusive); must be later than from.', schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/DispatchOrderView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/staff/v1/dispatch-orders/summaries:
+    get:
+      tags: [Dispatch]
+      operationId: getDispatchOrderSummaries
+      summary: Order counts per dispatch status under the current filters (permission dispatch:read; served by Dispatch)
+      description: Same property scope and filters as the list except dispatchStatus; all eight statuses are always returned and total is their sum.
+      parameters:
+        - $ref: '#/components/parameters/Search'
+        - { name: propertyId, in: query, required: false, schema: { type: string } }
+        - { name: channel, in: query, required: false, schema: { $ref: '#/components/schemas/DispatchOrderChannel' } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DispatchOrderSummaryView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/staff/v1/dispatch-orders/{tripId}:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Dispatch]
+      operationId: getDispatchOrder
+      summary: Drawer detail - order summary, notes, Booking assignment, latest offer, canDispatch and blockedReason (permission dispatch:read; served by Dispatch)
+      description: Reading the detail also reconciles an open offer with Booking's authoritative assignment (completes ACCEPTED when Booking already assigned this offer; closes a stale offer as SUPERSEDED).
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DispatchOrderView' } } } ] } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/staff/v1/dispatch-orders/{tripId}/drivers:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Dispatch]
+      operationId: listDispatchOrderDrivers
+      summary: Driver dropdown candidates for an order (permission dispatch:read; served by Dispatch)
+      description: >-
+        Only drivers of the order's property that are ACTIVE, AVAILABLE and not currently holding an offer are returned; search matches name and vehicle text.
+        Candidates must have a bound vehicle in the order property whose grade matches the order class and is not OUT_OF_SERVICE (vehicleMatch is MATCHED). Filtering precedes pagination.
+        The pickup instant first resolves to the configured business timezone's shift date and period. Only ON_DUTY drivers in that period are eligible; before 07:00 uses the previous date's NIGHT shift.
+        An order that cannot be dispatched answers 409.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Search'
+        - { name: sort, in: query, required: false, description: 'Allowed: name, driverId. Default name,driverId.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/DispatchCandidateView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/dispatch/staff/v1/dispatch-orders/{tripId}/offers:
+    parameters:
+      - { name: tripId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Dispatch]
+      operationId: listDispatchOrderOffers
+      summary: Offer history of an order, newest round first (permission dispatch:read; served by Dispatch)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - { name: sort, in: query, required: false, description: 'Allowed: round, createdAt, offerId. Default -createdAt,offerId.', schema: { type: string } }
+      responses:
+        '200': { description: Success, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/DispatchOfferView' } }, meta: { $ref: '#/components/schemas/PageMeta' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    post:
+      tags: [Dispatch]
+      operationId: createDispatchOrderOffer
+      summary: Send an offer to a driver - first dispatch or redispatch (permission dispatch:write; served by Dispatch)
+      description: >-
+        Requires Idempotency-Key; retry the same request with the same key and the previously created offer is returned. X-Expected-Version is optional and, when present,
+        must equal the order's current dispatch version (the round of the latest offer, version in the order view) or 409 / 40900 is answered.
+        The order must be CONFIRMED (or a stored PENDING order) without an assignment or open offer, and the driver ACTIVE, AVAILABLE and of the same property (422 otherwise). An order and a driver each hold at most one open offer;
+        unanswered offers past their expiry are closed first. A created offer is not an assignment: the order only becomes DRIVER_ASSIGNED after the driver accepts and Booking commits the assignment.
+        Staff cannot accept on behalf of a driver.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - { name: X-Expected-Version, in: header, required: false, description: 'Latest round the client saw (int64 as decimal string, >= 1); omit for the first dispatch.', schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateDispatchOfferRequest' } } } }
+      responses:
+        '201': { description: Created, headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }, content: { application/json: { schema: { allOf: [ { $ref: '#/components/schemas/SuccessEnvelope' }, { type: object, properties: { data: { $ref: '#/components/schemas/DispatchOfferView' } } } ] } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  headers:
+    TraceId: { description: 'Correlation id, identical to the body traceId.', schema: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 } }
+  parameters:
+    Page: { name: page, in: query, required: false, description: 'Page number, >= 1. Default 1.', schema: { type: integer, minimum: 1, default: 1 } }
+    PageSize: { name: pageSize, in: query, required: false, description: 'Page size. Default 10.', schema: { type: integer, enum: [10, 20, 50], default: 10 } }
+    Search: { name: search, in: query, required: false, description: 'Case-insensitive contains match on the visible columns; blank means no filter.', schema: { type: string } }
+    ExpectedVersion: { name: X-Expected-Version, in: header, required: false, description: 'Optional. The version the client read (int64 as decimal string, >= 1). It is currently NOT compared (optimistic locking is switched off for these resources): sending it is harmless, omitting it never fails, and a lost-update race is still caught by the conditional write (409 / 40900).', schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, description: 'Non-blank key; the same key with different content answers 409 / 40900.', schema: { type: string } }
+  responses:
+    BadRequest:
+      description: 'Malformed request (40000) or validation failed (40001).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Unauthorized:
+      description: 'Not authenticated (40100) or token expired (40101); no refresh endpoint - sign in again.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Forbidden:
+      description: 'Insufficient permission (40300).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    NotFound:
+      description: 'Resource not found (40400), or not visible to the caller.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    Conflict:
+      description: 'State conflict (40900): version mismatch, terminal state, or idempotency key reused with different content.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    UnprocessableEntity:
+      description: 'Business rule rejected (42200): active restriction, qualification, capacity, lead time or quota; errors[] names the failing fields.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    InternalError:
+      description: 'Internal server error (50000).'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+    ServiceUnavailable:
+      description: 'Service unavailable (50300): the authorization source, Platform catalog, guest read model or quota source cannot give a real answer.'
+      headers: { X-Trace-Id: { $ref: '#/components/headers/TraceId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [code, message, traceId]
+      properties:
+        code: { type: integer, example: 20000 }
+        message: { type: string, example: success }
+        data: { nullable: true }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+        traceId: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+    PageMeta:
+      type: object
+      required: [traceId]
+      properties:
+        traceId: { type: string }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+    Pagination:
+      type: object
+      required: [currentPage, pageSize, totalItems, totalPages]
+      properties:
+        currentPage: { type: integer, example: 1 }
+        pageSize: { type: integer, example: 10 }
+        totalItems: { type: integer, example: 42 }
+        totalPages: { type: integer, example: 5 }
+    ErrorEnvelope:
+      type: object
+      required: [code, message, errors, traceId]
+      properties:
+        code: { type: integer, example: 42200 }
+        message: { type: string, example: Business rule rejected }
+        errors: { type: array, items: { type: object, required: [field, message], properties: { field: { type: string }, message: { type: string } } } }
+        traceId: { type: string, example: 4bf92f3577b34da6a3ce929d0e0e4736 }
+    TripStatus: { type: string, enum: [PENDING, CONFIRMED, DRIVER_ASSIGNED, DRIVER_EN_ROUTE, ARRIVED_AT_PICKUP, IN_PROGRESS, COMPLETED, CANCELLED] }
+    TripStage: { type: string, enum: [PENDING, CONFIRMED, DRIVER_ASSIGNED, DRIVER_EN_ROUTE, ARRIVED_AT_PICKUP, PASSENGER_ON_BOARD, IN_TRANSIT, ARRIVED_AT_DESTINATION, COMPLETED, CANCELLED], description: 'Status to display. Refines IN_PROGRESS into PASSENGER_ON_BOARD, IN_TRANSIT and ARRIVED_AT_DESTINATION; every other value equals the 8-state status.' }
+    NotificationType: { type: string, enum: [BOOKING_CONFIRMED, DRIVER_ASSIGNED, DRIVER_ARRIVED, TRIP_COMPLETED, APPROVAL_REQUIRED, SYSTEM_ALERT] }
+    TripView:
+      type: object
+      required: [tripId, tripReference, propertyId, guest, route, pickupAt, pickupMode, serviceType, vehicleClass, passengers, luggage, status, stage, points, bookedBy, confirmationLanguage, version, channel]
+      properties:
+        tripId: { type: string, example: trip_0190a1b2c3d4 }
+        tripReference: { type: string, example: TR-20261011-042 }
+        channel: { type: string, enum: [CONSOLE, SELF_SERVICE], example: CONSOLE, description: 'Persisted booking source. Legacy trips without a channel return CONSOLE.' }
+        productCode: { allOf: [ { $ref: '#/components/schemas/BookingProductCode' } ], nullable: true, description: 'Service product shared by customer and console bookings; omitted for legacy console trips.' }
+        propertyId: { type: string }
+        guest: { type: object, required: [guestId, name, tierCode], properties: { guestId: { type: string }, name: { type: string }, tierCode: { type: string }, roomNumber: { type: string, nullable: true }, memberId: { type: string, nullable: true }, phoneMasked: { type: string, nullable: true, example: '+853 6***4829' } } }
+        route: { type: object, required: [pickupLocationId, pickupName, dropoffLocationId, dropoffName, isCrossBorder], properties: { pickupLocationId: { type: string }, pickupName: { type: string }, dropoffLocationId: { type: string }, dropoffName: { type: string }, isCrossBorder: { type: boolean, description: 'Recorded only in phase 1 (D8); not linked to cross-border approvals.' } } }
+        pickupAt: { type: string, format: date-time, description: 'ISO 8601 UTC.' }
+        pickupMode: { type: string, enum: [ASAP, TODAY, SCHEDULED] }
+        serviceType: { type: string, enum: [ONE_WAY, AIRPORT_PICKUP, AIRPORT_DROPOFF, INTER_PROPERTY] }
+        vehicleClass: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH], description: 'Vehicle class recorded at booking time; historical orders retain their original class.' }
+        passengers: { type: integer }
+        luggage: { type: integer }
+        specialRequests: { type: string, nullable: true }
+        status: { allOf: [ { $ref: '#/components/schemas/TripStatus' } ], description: '8-state status for filtering and business rules.' }
+        stage: { $ref: '#/components/schemas/TripStage' }
+        points: { type: object, required: [required, state], properties: { required: { type: integer, format: int64 }, reference: { type: string, nullable: true }, state: { type: string, enum: [RESERVED, REDEEMED, RETURNED, NONE] } } }
+        cancellation: { type: object, nullable: true, properties: { reasonCode: { type: string }, comments: { type: string }, cancelledBy: { type: string }, cancelledAt: { type: string, format: date-time }, policyReference: { type: string, nullable: true } } }
+        bookedBy: { type: object, required: [userId, roleCode], description: 'Resolved from the token (HA-03 / PM-AD-51); never accepted from the body. name is the name snapshot taken at booking time and is omitted for trips created before it was kept.', properties: { userId: { type: string }, roleCode: { type: string }, name: { type: string, nullable: true } } }
+        confirmationLanguage: { type: string, example: EN }
+        version: { type: integer, format: int64 }
+        lastModification: { allOf: [ { $ref: '#/components/schemas/TripModificationView' } ], nullable: true, description: The latest recorded modification; null when the trip was never modified. }
+        assignment:
+          type: object
+          nullable: true
+          description: Snapshot of the assigned driver taken at assignment time; null until a driver is assigned.
+          required: [driverId, driverName, vehicleLabel, assignedAt]
+          properties:
+            driverId: { type: string }
+            driverName: { type: string }
+            vehicleLabel: { type: string, description: Free-text vehicle (model and plate) recorded at assignment. }
+            assignedAt: { type: string, format: date-time }
+    BookingProductCode: { type: string, enum: [BUSINESS_SEDAN, LIMOUSINE, PARTY, CROSS_BORDER_TRANSFER] }
+    ConsoleBookingOptionsView:
+      type: object
+      required: [products, vehicles, isAsapAvailable]
+      properties:
+        isAsapAvailable: { type: boolean }
+        products:
+          type: array
+          items:
+            type: object
+            required: [productCode, name, isBookable, serviceType, routeScope, vehicleClass]
+            properties:
+              productCode: { $ref: '#/components/schemas/BookingProductCode' }
+              name: { type: string }
+              isBookable: { type: boolean }
+              serviceType: { type: string, enum: [ONE_WAY, AIRPORT_PICKUP, AIRPORT_DROPOFF, INTER_PROPERTY] }
+              vehicleClass: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH], description: 'Vehicle class derived from this service product.' }
+              routeScope: { type: string, enum: [LOCAL, CROSS_BORDER] }
+              unavailableReason: { type: string, nullable: true }
+        vehicles:
+          type: array
+          items:
+            type: object
+            required: [vehicleClass, maxPassengers, maxLuggage]
+            properties:
+              vehicleClass: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH], description: Vehicle class of this capacity entry. }
+              maxPassengers: { type: integer }
+              maxLuggage: { type: integer }
+    CreateTripRequest:
+      type: object
+      additionalProperties: false
+      required: [guestId, propertyId, pickupLocationId, dropoffLocationId, pickupMode, serviceType, passengers, luggage]
+      properties:
+        guestId: { type: string }
+        propertyId: { type: string }
+        pickupLocationId: { type: string }
+        dropoffLocationId: { type: string }
+        productCode: { allOf: [ { $ref: '#/components/schemas/BookingProductCode' } ], description: 'Optional for legacy clients. When supplied, validates the enabled product, route scope and ASAP setting; serviceType and vehicleClass are derived from product configuration. Persisted as the service product while channel remains CONSOLE.' }
+        pickupAt: { type: string, format: date-time, description: 'Required unless pickupMode is ASAP.' }
+        pickupMode: { type: string, enum: [ASAP, TODAY, SCHEDULED] }
+        serviceType: { type: string, enum: [ONE_WAY, AIRPORT_PICKUP, AIRPORT_DROPOFF, INTER_PROPERTY] }
+        vehicleClass: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH], description: 'Derived when productCode is provided; an explicit mismatch returns 40001. Required for legacy requests without productCode.' }
+        passengers: { type: integer, minimum: 1 }
+        luggage: { type: integer, minimum: 0 }
+        specialRequests: { type: string, nullable: true }
+        confirmationLanguage: { type: string, default: EN }
+    PatchTripRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        pickupLocationId: { type: string, nullable: true }
+        dropoffLocationId: { type: string, nullable: true }
+        pickupAt: { type: string, format: date-time, nullable: true }
+        pickupMode: { type: string, enum: [ASAP, TODAY, SCHEDULED], nullable: true }
+        serviceType: { type: string, enum: [ONE_WAY, AIRPORT_PICKUP, AIRPORT_DROPOFF, INTER_PROPERTY], nullable: true }
+        vehicleClass: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH], nullable: true }
+        passengers: { type: integer, nullable: true }
+        luggage: { type: integer, nullable: true }
+        specialRequests: { type: string, nullable: true, description: 'Explicit null clears the value.' }
+        confirmationLanguage: { type: string, nullable: true }
+        modificationReason: { type: string, enum: [GUEST_REQUEST, SCHEDULE_CHANGE], description: 'Why the modification is made (optional; not a trip field).' }
+        modificationComments: { type: string, description: 'Optional note for the modification record.' }
+    CancelTripRequest:
+      type: object
+      additionalProperties: false
+      required: [reasonCode]
+      properties:
+        reasonCode: { type: string, description: 'Must exist in the uploaded cancellation reasons (CF03).' }
+        comments: { type: string, description: 'Optional; omitted is stored as empty.' }
+    TripModificationView:
+      type: object
+      required: [modifiedBy, modifiedAt, changedFields]
+      properties:
+        reason: { type: string, nullable: true, enum: [GUEST_REQUEST, SCHEDULE_CHANGE, null], description: Omitted when the caller gave no reason. }
+        comments: { type: string, nullable: true }
+        modifiedBy: { type: string }
+        modifiedByName: { type: string, nullable: true, description: Name snapshot; omitted for records written before names were kept. }
+        modifiedAt: { type: string, format: date-time }
+        changedFields: { type: array, items: { type: string }, description: Field names only, never values. }
+    TripTrackView:
+      type: object
+      required: [tripId, isSharing, sampled, points]
+      properties:
+        tripId: { type: string }
+        isSharing: { type: boolean, description: Driver has departed and the trip has not ended; false means no further points will arrive. }
+        sampled: { type: boolean, description: True when more than 2000 points were evenly sampled. }
+        points: { type: array, items: { $ref: '#/components/schemas/TripLocationView' } }
+    TripLocationView:
+      type: object
+      required: [latitude, longitude, headingDegrees, speedKmh, seq, recordedAt]
+      properties:
+        latitude: { type: number, format: double, description: GCJ-02 }
+        longitude: { type: number, format: double, description: GCJ-02 }
+        headingDegrees: { type: number, format: double, nullable: true, description: 0-360; null when the driver app did not report it. }
+        speedKmh: { type: number, format: double, nullable: true }
+        seq: { type: integer, format: int64 }
+        recordedAt: { type: string, format: date-time, description: Device fix time in UTC ending with Z. }
+    TripTimelineEventView:
+      type: object
+      required: [eventId, type, occurredAt, actorId]
+      properties:
+        eventId: { type: string }
+        type: { type: string, enum: [CREATED, MODIFIED, DRIVER_ASSIGNED, STARTED_EN_ROUTE, ARRIVED_AT_PICKUP, PASSENGER_BOARDED, IN_TRANSIT, ARRIVED_AT_DESTINATION, COMPLETED, CANCELLED] }
+        occurredAt: { type: string, format: date-time }
+        orderStatus: { type: string, nullable: true, description: Order status after the event; omitted for CREATED and MODIFIED. }
+        stage: { allOf: [ { $ref: '#/components/schemas/TripStage' } ], nullable: true, description: 'Status to display after the event (distinct for PASSENGER_BOARDED, IN_TRANSIT and ARRIVED_AT_DESTINATION); omitted for CREATED and MODIFIED, which are shown by type.' }
+        actorId: { type: string }
+        actorName: { type: string, nullable: true }
+        reason: { type: string, nullable: true, description: MODIFIED only. }
+        changedFields: { type: array, nullable: true, items: { type: string }, description: MODIFIED only. }
+    BookingPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [guestId, propertyId, pickupLocationId, dropoffLocationId, pickupMode, serviceType, passengers, luggage]
+      properties:
+        guestId: { type: string }
+        propertyId: { type: string }
+        productCode: { allOf: [ { $ref: '#/components/schemas/BookingProductCode' } ], description: 'Optional; product and route validation match createTrip.' }
+        pickupLocationId: { type: string }
+        dropoffLocationId: { type: string }
+        pickupAt: { type: string, format: date-time, description: 'Required unless pickupMode is ASAP.' }
+        pickupMode: { type: string, enum: [ASAP, TODAY, SCHEDULED] }
+        serviceType: { type: string, enum: [ONE_WAY, AIRPORT_PICKUP, AIRPORT_DROPOFF, INTER_PROPERTY] }
+        vehicleClass: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH], description: 'Derived when productCode is provided; an explicit mismatch returns 40001. Required for legacy requests without productCode.' }
+        passengers: { type: integer }
+        luggage: { type: integer }
+    BookingPreviewView:
+      type: object
+      required: [canSubmit, willWaitlist, requiresApproval, blockedReasons, eligibility, points, evaluatedAt]
+      properties:
+        canSubmit: { type: boolean, description: 'Whether createTrip would accept this input now. qualified from qualification-check does not imply it.' }
+        willWaitlist: { type: boolean, description: 'Compatibility field, always false: orders are always created as CONFIRMED and a WAITLIST quota no longer blocks.' }
+        requiresApproval: { type: boolean, description: 'Blocked because the guest does not qualify and a manager review is the way forward. The preview does not register a review.' }
+        blockedReasons:
+          type: array
+          items:
+            type: object
+            required: [code, field, message]
+            properties:
+              code: { type: string, enum: [GUEST_RESTRICTED, QUALIFICATION_NOT_MET, VEHICLE_NOT_ENTITLED, PASSENGERS_EXCEED_CAPACITY, LUGGAGE_EXCEEDS_CAPACITY, PICKUP_TIME_INVALID, QUOTA_EXHAUSTED, LOCATION_NOT_ACTIVE, RULE_VIOLATION] }
+              field: { type: string }
+              message: { type: string }
+        eligibility:
+          type: object
+          required: [tier, playVerified, playWindowDays, entitledVehicleClasses, isVehicleEntitled]
+          properties:
+            tier: { type: string }
+            tierMinimum: { type: string, nullable: true }
+            playVerified: { type: boolean }
+            playWindowDays: { type: integer }
+            entitledVehicleClasses: { type: array, items: { type: string } }
+            isVehicleEntitled: { type: boolean }
+        points:
+          type: object
+          required: [required, basis]
+          properties:
+            required: { type: integer, format: int64, description: Points the selected vehicle class needs (Console:VehicleClasses). }
+            available: { type: integer, format: int64, nullable: true, description: Member snapshot points; omitted when no trusted value. }
+            shortfall: { type: integer, format: int64, nullable: true }
+            estimatedBalanceAfter: { type: integer, format: int64, nullable: true, description: An estimate, not a deducted balance. }
+            basis: { type: string, enum: [REFERENCE_ESTIMATE] }
+        evaluatedAt: { type: string, format: date-time }
+    UpdateGuestRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100, description: Trimmed; cannot be null or blank. }
+        tier: { type: string, enum: [SILVER, GOLD, PLATINUM, DIAMOND, VIP] }
+        roomNumber: { type: string, maxLength: 50, nullable: true, description: Null or blank clears the room. }
+        propertyId: { type: string, maxLength: 100, nullable: true, description: Null or blank clears the property; only all-property callers may do this. }
+    GuestSummaryView:
+      type: object
+      required: [guestId, name, memberId, tier, inHouse]
+      properties:
+        guestId: { type: string, example: guest_0190a1b2c3d4 }
+        name: { type: string }
+        roomNumber: { type: string, nullable: true }
+        memberId: { type: string, example: MC00893521 }
+        tier: { type: string, enum: [SILVER, GOLD, PLATINUM, DIAMOND, VIP] }
+        inHouse: { type: boolean }
+        propertyId: { type: string, nullable: true }
+    GuestProfileView:
+      type: object
+      required: [guestId, name, tier, memberId, inHouse, blacklistStatus, preferences, recentTrips]
+      properties:
+        guestId: { type: string }
+        name: { type: string }
+        tier: { type: string, enum: [SILVER, GOLD, PLATINUM, DIAMOND, VIP] }
+        memberId: { type: string }
+        roomNumber: { type: string, nullable: true }
+        propertyId: { type: string, nullable: true }
+        stayFrom: { type: string, format: date, nullable: true }
+        stayTo: { type: string, format: date, nullable: true }
+        pointsBalance: { type: integer, format: int64, nullable: true }
+        phoneMasked: { type: string, nullable: true, example: '+853 6***4829' }
+        inHouse: { type: boolean }
+        blacklistStatus: { type: object, required: [listed], properties: { listed: { type: boolean }, reason: { type: string, nullable: true } } }
+        preferences: { type: object, properties: { language: { type: string, nullable: true }, preferredVehicleClass: { type: string, nullable: true }, confirmationChannel: { type: string, nullable: true } } }
+        specialRequests: { type: string, nullable: true }
+        recentTrips: { type: array, items: { $ref: '#/components/schemas/TripView' }, description: 'Latest trips visible to the caller, newest pickup first.' }
+    QualificationCheckView:
+      type: object
+      required: [tier, playVerified, playWindowDays, vehicleEntitlements, qualified]
+      properties:
+        tier: { type: string }
+        tierMinimum: { type: string, nullable: true, description: 'Lowest tier with a non-empty entitlement, per Console:TierEntitlements (D4).' }
+        playVerified: { type: boolean }
+        playWindowDays: { type: integer, example: 90 }
+        vehicleEntitlements: { type: array, items: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH] } }
+        pointsAvailable: { type: integer, format: int64, nullable: true }
+        qualified: { type: boolean }
+    ConsoleNotificationView:
+      type: object
+      required: [notificationId, type, summary, occurredAt, isRead]
+      properties:
+        notificationId: { type: string }
+        type: { $ref: '#/components/schemas/NotificationType' }
+        summary: { type: string, example: 'Transfer TR-20261011-042 confirmed for James Liu.' }
+        tripReference: { type: string, nullable: true }
+        occurredAt: { type: string, format: date-time }
+        isRead: { type: boolean }
+        readAt: { type: string, format: date-time, nullable: true }
+        targetType: { type: string, nullable: true, enum: [TRIP, QUALIFICATION, null], description: 'What a click should open; omitted for notifications created before targets were kept.' }
+        targetId: { type: string, nullable: true, description: 'tripId for TRIP, qualificationId for QUALIFICATION.' }
+    StaffPreferencesView:
+      type: object
+      required: [station, defaultNotificationChannel, confirmationLanguage, enabledNotificationTypes, favoriteLocationIds, recentLocationIds]
+      properties:
+        station: { type: string }
+        defaultNotificationChannel: { type: string, enum: [SMS, IN_ROOM_MESSAGE] }
+        confirmationLanguage: { type: string, example: EN }
+        enabledNotificationTypes: { type: array, items: { $ref: '#/components/schemas/NotificationType' } }
+        favoriteLocationIds: { type: array, items: { type: string } }
+        recentLocationIds: { type: array, items: { type: string }, description: 'Recorded automatically on trip creation, capped at 6.' }
+    DispatchOrderChannel:
+      type: string
+      enum: [CONSOLE, SELF_SERVICE]
+      description: CONSOLE is a console (front-desk) booking; SELF_SERVICE is a customer self-service booking. Stored trips without a channel are CONSOLE.
+    DispatchStatus:
+      type: string
+      enum: [PENDING_CONFIRMATION, PENDING, AWAITING_RESPONSE, PROCESSING, DRIVER_ASSIGNED, NEEDS_REDISPATCH, COMPLETED, CANCELLED]
+      description: >-
+        Derived at read time from the Booking order status and the latest Dispatch offer. It is independent of orderStatus and of the offer status.
+        PENDING (formerly UNASSIGNED): awaiting dispatch - the order is CONFIRMED (or a stored PENDING order) with no open offer and can receive driver invitations. New orders are CONFIRMED with dispatchStatus PENDING; after a driver accepts, Booking assigns the driver and advances the order to DRIVER_ASSIGNED.
+        PENDING_CONFIRMATION is retained for compatibility only: its filter returns no orders and its summary count is zero. AWAITING_RESPONSE: an unexpired PENDING offer.
+        PROCESSING: the driver accepted and Booking's assignment is not confirmed yet. DRIVER_ASSIGNED: Booking assigned a driver. NEEDS_REDISPATCH: the latest offer was declined, expired or superseded and the order is still pending or confirmed.
+        COMPLETED: the order is completed and cannot be dispatched. CANCELLED: the order is cancelled and cannot be dispatched.
+    DispatchOfferStatus:
+      type: string
+      enum: [PENDING, ACCEPTING, ACCEPTED, DECLINED, EXPIRED, SUPERSEDED]
+    DispatchOrderView:
+      type: object
+      required: [tripId, tripReference, propertyId, channel, guest, route, pickupAt, pickupMode, serviceType, vehicleClass, passengers, luggage, orderStatus, dispatchStatus, bookedBy, createdAt, canDispatch, syncStatus, version, syncedAt]
+      properties:
+        tripId: { type: string }
+        tripReference: { type: string, example: TR-20261012-003 }
+        propertyId: { type: string }
+        channel: { $ref: '#/components/schemas/DispatchOrderChannel' }
+        guest:
+          type: object
+          required: [name, tierCode]
+          properties:
+            name: { type: string }
+            roomNumber: { type: string, nullable: true }
+            tierCode: { type: string }
+            memberId: { type: string, nullable: true }
+        route:
+          type: object
+          required: [pickupName, dropoffName, isCrossBorder]
+          description: Text only; no map, distance or duration.
+          properties:
+            pickupName: { type: string }
+            dropoffName: { type: string }
+            isCrossBorder: { type: boolean }
+        pickupAt: { type: string, format: date-time }
+        pickupMode: { type: string, enum: [ASAP, TODAY, SCHEDULED] }
+        serviceType: { type: string, enum: [ONE_WAY, AIRPORT_PICKUP, AIRPORT_DROPOFF, INTER_PROPERTY] }
+        vehicleClass: { type: string }
+        passengers: { type: integer }
+        luggage: { type: integer }
+        specialRequests: { type: string, nullable: true }
+        orderStatus: { type: string, enum: [PENDING, CONFIRMED, DRIVER_ASSIGNED, DRIVER_EN_ROUTE, ARRIVED_AT_PICKUP, IN_PROGRESS, COMPLETED, CANCELLED] }
+        dispatchStatus: { $ref: '#/components/schemas/DispatchStatus' }
+        currentOffer: { allOf: [ { $ref: '#/components/schemas/DispatchOfferView' } ], nullable: true, description: The latest offer round; null when no offer was ever sent. }
+        assignment:
+          type: object
+          nullable: true
+          description: Booking's authoritative assignment; driverName and vehicleLabel are snapshots taken at assignment time.
+          required: [offerId, driverId, driverName, vehicleLabel, assignedAt]
+          properties:
+            offerId: { type: string }
+            driverId: { type: string }
+            driverName: { type: string }
+            vehicleLabel: { type: string }
+            assignedAt: { type: string, format: date-time }
+        bookedBy: { type: object, required: [userId, roleCode], description: 'Who placed the order: a console user, or the customer for self-service. name is the snapshot taken at booking time and is omitted for older orders.', properties: { userId: { type: string }, roleCode: { type: string }, name: { type: string, nullable: true } } }
+        createdAt: { type: string, format: date-time, description: Order placed time. }
+        canDispatch: { type: boolean }
+        blockedReason: { type: string, nullable: true, enum: [PENDING_CONFIRMATION, OFFER_PENDING, OFFER_PROCESSING, DRIVER_ASSIGNED, ORDER_CANCELLED, ORDER_COMPLETED, null] }
+        syncStatus: { type: string, enum: [IN_SYNC, RECOVERING], description: 'RECOVERING: Booking already assigned while the offer is still PROCESSING; Booking wins and no second dispatch is allowed.' }
+        version: { type: integer, format: int64, description: 'Dispatch version = round of the latest offer (0 when none). Use as X-Expected-Version when sending an offer.' }
+        syncedAt: { type: string, format: date-time, description: Server time of this read; orders are read live from Booking. }
+    DispatchOfferView:
+      type: object
+      required: [offerId, round, status, driverId, createdAt, expiresAt, serverTime, version]
+      properties:
+        offerId: { type: string }
+        round: { type: integer, description: '1-based; 0 for offers created before rounds were recorded.' }
+        status: { $ref: '#/components/schemas/DispatchOfferStatus' }
+        driverId: { type: string }
+        driverName: { type: string, nullable: true }
+        createdBy: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        serverTime: { type: string, format: date-time, description: 'Calibrate countdowns with this. After the countdown ends re-query the server instead of marking the offer EXPIRED locally.' }
+        version: { type: integer, format: int64 }
+    DispatchOrderSummaryView:
+      type: object
+      required: [total, counts]
+      properties:
+        total: { type: integer, format: int64 }
+        counts:
+          type: object
+          additionalProperties: { type: integer, format: int64 }
+          description: Keyed by dispatch status literal; all eight statuses are present, including separate COMPLETED and CANCELLED counts.
+    DispatchCandidateView:
+      type: object
+      required: [driverId, name, propertyId, availability, vehicleLabel, vehicleMatch, languages]
+      properties:
+        driverId: { type: string, description: Submit this as driverId; the display name or plate cannot replace it. }
+        name: { type: string }
+        propertyId: { type: string }
+        availability: { type: string, enum: [AVAILABLE] }
+        vehicleLabel: { type: string, description: Free text from the driver master record. }
+        vehicleClass: { type: string, enum: [BUSINESS_SEDAN, LUXURY_SEDAN, LUXURY_MPV, MAYBACH], description: Current bound vehicle class matching the order. }
+        vehicleMatch: { type: string, enum: [MATCHED], description: Bound vehicle grade matches the order class; excludes unbound or out-of-service vehicles and vehicles in another property. }
+        languages: { type: array, items: { type: string } }
+    CreateDispatchOfferRequest:
+      type: object
+      additionalProperties: false
+      required: [driverId]
+      properties:
+        driverId: { type: string }

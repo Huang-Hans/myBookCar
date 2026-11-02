@@ -1,0 +1,6 @@
+# Build context is the frontend root (shared map files live here); keep per-app ignores effective.
+**/node_modules
+**/dist
+**/unpackage
+**/.vite
+**/*.log

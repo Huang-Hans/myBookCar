@@ -1,0 +1,12 @@
+{
+  "pages": [
+    { "path": "pages/login/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "Driver Sign In" } },
+    { "path": "pages/home/index", "style": { "navigationStyle": "custom", "navigationBarTitleText": "LMS Driver" } }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "LMS Driver",
+    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundColor": "#f8f8f8"
+  }
+}

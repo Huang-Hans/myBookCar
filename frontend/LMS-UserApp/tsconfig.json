@@ -1,0 +1,31 @@
+{
+    "extends":  "@vue/tsconfig/tsconfig.dom.json",
+    "compilerOptions":  {
+                            "baseUrl":  ".",
+                            "paths":  {
+                                          "@/*":  [
+                                                      "src/*"
+                                                  ]
+                                      },
+                            "types":  [
+                                          "@dcloudio/types",
+                                          "vite/client"
+                                      ],
+                            "allowJs":  true,
+                            "sourceMap":  true,
+                            "strict":  true,
+                            "noImplicitAny":  true,
+                            "skipLibCheck":  true,
+                            "lib":  [
+                                        "ES2021",
+                                        "DOM"
+                                    ],
+                            "noUncheckedIndexedAccess":  true
+                        },
+    "include":  [
+                    "src/**/*.ts",
+                    "src/**/*.d.ts",
+                    "src/**/*.tsx",
+                    "src/**/*.vue"
+                ]
+}

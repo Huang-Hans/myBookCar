@@ -1,0 +1,5 @@
+{
+  "appHost": {
+    "path": "backend/LMS.AppHost/LMS.AppHost.csproj"
+  }
+}

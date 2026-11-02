@@ -1,0 +1,46 @@
+# LMS 身份基础设施：Keycloak（使用已有的外部 PostgreSQL 保存 Keycloak 自身的账号、Realm、Client 数据；LMS 业务数据仍在 MongoDB）
+#
+# 启动（在仓库根目录执行）：docker compose -p lms -f backend/docker/docker-compose.keycloak.yml up -d
+# 停止：                     docker compose -p lms -f backend/docker/docker-compose.keycloak.yml down
+#
+# 必填环境变量（写在同目录 .env 或 shell 环境中，不要提交到仓库；缺少任何一项 compose 都会拒绝启动）：
+#   KEYCLOAK_ADMIN_USERNAME / KEYCLOAK_ADMIN_PASSWORD   Keycloak 控制台管理员（master realm），不用于调用 LMS
+#   KEYCLOAK_DB_URL        例如 jdbc:postgresql://<host>:5432/<database>
+#   KEYCLOAK_DB_USERNAME / KEYCLOAK_DB_PASSWORD         Keycloak 数据库账号，需对该库有建表权限
+# 可选环境变量（都有默认值）：
+#   KEYCLOAK_HTTP_PORT      发布端口，默认 8080（部署机上被占用时改这里）
+#   KEYCLOAK_HOSTNAME       对外地址，默认 http://localhost:8080；必须与 API 的 Identity:Authority 一致
+#
+# 首次启动会导入 keycloak/lms-realm.json：Realm lms（关闭自助注册，access token 15 分钟）、
+# 客户端 lms-api-client（公开客户端，所有授权流程默认关闭；默认范围 basic / email / profile，令牌带 sub、email、email_verified）及其 lms-api audience 映射，
+# 用户资料中 email 仅管理员可编辑，firstName / lastName 非必填（密码模式登录不会因资料缺失被拒绝）。
+# 导入不创建任何用户。业务账号、客户端授权流程（授权码或隔离开发环境的 Direct Access Grants）需要在控制台配置，
+# 见 docs/design/LMS-plan-20261008-10-keycloak-mvp.md。Realm 已存在时不会再次导入。
+#
+# 本文件使用 start-dev（HTTP、本机 localhost:8080），只适合隔离的开发环境。
+# 生产必须使用固定的 HTTPS hostname 和 start 命令，且 issuer 必须与 API 的 Identity:Authority 完全一致。
+
+version: "3.8"
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4.0
+    container_name: lms-keycloak
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm"]
+    ports:
+      # 部署机上 8080 可能已被占用，可用 KEYCLOAK_HTTP_PORT 覆盖发布端口；默认仍是 8080
+      - "${KEYCLOAK_HTTP_PORT:-8080}:8080"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:?KEYCLOAK_ADMIN_USERNAME is required}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is required}
+      KC_DB: postgres
+      KC_DB_URL: ${KEYCLOAK_DB_URL:?KEYCLOAK_DB_URL is required}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USERNAME:?KEYCLOAK_DB_USERNAME is required}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD is required}
+      # 固定对外 hostname，token 的 iss 因此恒为 ${KEYCLOAK_HOSTNAME}/realms/lms，必须与 API 的 Identity:Authority 完全一致。
+      # 本机开发用默认 http://localhost:8080；跑在共享开发机上时用 KEYCLOAK_HOSTNAME 设为该机可达地址，
+      # 并把三个 API 的 Identity:Authority 改成同一个值。
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-http://localhost:8080}
+    volumes:
+      - ./keycloak/lms-realm.json:/opt/keycloak/data/import/lms-realm.json:ro

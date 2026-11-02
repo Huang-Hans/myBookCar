@@ -1,0 +1,149 @@
+# Visual Studio cache and user-specific files
+.vs/
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio cache/options files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.vspscc
+*.vssscc
+.builds
+
+# Visual Studio 2015/2017/2019/2022 cache/options directory
+.vs/
+.idea
+
+# MonoDevelop/Xamarin Studio
+*.pidb
+.userprefs
+
+# Build results of an entire project
+_Imports/
+*BuildResults*/
+bin/*/
+obj/*/
+
+# NuGet Packages
+*.nupkg
+*.snupkg
+**/packages/*
+!**/packages/build/
+
+# Visual Studio cache
+*.cache
+*.cache.dll
+*.cache.pdb
+
+# Files built by Visual Studio
+*_i.c
+*_p.c
+*_h.h
+*.ilk
+*.meta
+*.obj
+*.iobj
+*.pch
+*.ipdb
+*.lib
+*.idb
+*.dll
+*.exe
+*.pdb
+
+# Test results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+# NCrunch
+_NCrunch_*
+.*crunch*.local.xml
+nCrunchTemp_*
+
+# MightyMoose
+*.mm.*
+.autotest
+
+# Web workbench (Sass/Compass)
+.sass-cache/
+
+# Installshield output folder
+[Ee]xpress/
+
+# DocProject
+DocProject/buildhelp/
+DocProject/Help/*.HxT
+DocProject/Help/*.HxC
+DocProject/Help/*.hhc
+
+# MiniProfiler
+App_Code/
+
+# CodeRush
+.bin/
+.obj/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.env.local
+.env.*.local
+.venv
+venv/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Microsoft Office temporary lock files
+~$*.docx
+~$*.xlsx
+~$*.pptx
+
+# Local file storage written at runtime (FileStorage RootPath of local runs)
+backend/src/Services/Platform/LMS.Platform.Api/storage/
+backend/src/Services/Reporting/LMS.Reporting.Api/storage/
+
+# Claude Code
+.claude/
+/Peterson.AppHost/NUL
+*/package-lock.json
+!frontend/LMS-Admin/package-lock.json
+!frontend/LMS-User/package-lock.json
+!frontend/LMS-DriverApp/package-lock.json
+!frontend/LMS-ClientApp/package-lock.json
+AGENTS.md
+.guidelines
+docs/design
+.codex
+outputs
+.zcodeignore
+yarn.lock
+
+# Local Codex development-server logs
+.codex-dev.*.log
+frontend-signalr/
+
+# Local deployment credentials
+backend/docker/.env.development
+.codex_session_dump/

@@ -1,0 +1,35 @@
+import { describe, expect, it } from 'vitest'
+import pageSource from './index.vue?raw'
+import mapSource from '../../components/TripTrackMap.vue?raw'
+
+describe('staff trip map presentation', () => {
+  it('matches the client map layout and keeps live-track status distinct from the planned route', () => {
+    expect(pageSource).toContain('<view class="map-heading"><text class="card-title">{{ t(\'行程地圖\') }}</text></view>')
+    expect(pageSource).toContain('.map-heading { padding:17px; background:#fff; }')
+    expect(pageSource).toContain('@metrics="mapMetrics = $event"')
+    expect(pageSource).toContain(":show-approach-route=\"trip.status === 'DRIVER_EN_ROUTE' && showVehicle\"")
+    expect(pageSource).toContain('class="map-mileage"')
+    expect(pageSource).toContain("{{ t('物業') }}")
+    expect(pageSource).toContain("{{ t('出發時間') }}")
+    expect(pageSource).toContain("{{ t('訂單狀態') }}")
+    expect(pageSource).not.toContain("t('公里 / 小時')")
+    expect(pageSource).toContain('class="map-source"')
+    expect(pageSource).not.toContain("t('A 上車點')")
+    expect(pageSource).not.toContain("t('B 下車點')")
+    expect(pageSource).not.toContain("t('暫無行駛軌跡')")
+    expect(pageSource).not.toContain('class="map-status"')
+    expect(mapSource).toContain('buildDrivingUrl(mapConfig.webKey, origin, destination)')
+    expect(mapSource).toContain('tripStopMarkerContent(kind)')
+    expect(mapSource).toContain('tripVehicleMarkerContent()')
+    expect(mapSource).toContain('class="map-address-panel"')
+    expect(mapSource).toContain("{{ origin.name || t('未知上車地點') }}")
+    expect(mapSource).toContain("{{ destination.name || t('未知下車地點') }}")
+    expect(mapSource).not.toContain('formatPosition(resolvedOrigin, origin.name)')
+    expect(mapSource).not.toContain('formatPosition(resolvedDestination, destination.name)')
+    expect(mapSource).toContain('class="map-controls"')
+    expect(mapSource).toContain('function updateApproachRoute(): void')
+    expect(mapSource).toContain("strokeStyle: 'dashed'")
+    expect(mapSource).toContain('.track-map-wrap { position: relative; z-index:0; isolation:isolate;')
+    expect(mapSource).toContain('.map-address-panel { position: absolute; bottom: 38px;')
+  })
+})

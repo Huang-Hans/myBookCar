@@ -1,0 +1,38 @@
+db = db.getSiblingDB('lms_booking');
+const existing = new Set(db.getCollectionNames());
+const collections = ["property_quotas", "quota_overrides", "qualification_references", "cross_border_approvals", "audit_records", "idempotency_records", "trips", "guests", "console_notifications", "staff_preferences", "customer_account_profiles", "customer_preferences", "customer_location_favorites", "trip_reviews", "trip_live_locations", "trip_location_points", "notification_events"];
+for (const name of collections) {
+  if (!existing.has(name)) db.createCollection(name);
+}
+db.getCollection('quota_overrides').createIndex({"propertyId": 1, "guestId": 1}, {"name": "ux_pending_property_guest", "unique": true, "partialFilterExpression": {"status": "MANAGER_APPROVAL_REQUIRED"}});
+db.getCollection('quota_overrides').createIndex({"propertyId": 1, "requestedAt": -1}, {"name": "ix_property_requested"});
+db.getCollection('qualification_references').createIndex({"propertyId": 1, "status": 1}, {"name": "ix_property_status"});
+db.getCollection('cross_border_approvals').createIndex({"propertyId": 1, "status": 1, "pickupAt": 1}, {"name": "ix_property_status_pickup"});
+db.getCollection('audit_records').createIndex({"resourceType": 1, "resourceId": 1, "occurredAt": -1}, {"name": "ix_resource_occurred"});
+db.getCollection('audit_records').createIndex({"traceId": 1}, {"name": "ix_trace"});
+db.getCollection('audit_records').createIndex({"propertyId": 1, "occurredAt": -1}, {"name": "ix_property_occurred"});
+db.getCollection('idempotency_records').createIndex({"expiresAt": 1}, {"name": "ttl_expires_at", "expireAfterSeconds": 0});
+db.getCollection('trips').createIndex({"tripReference": 1}, {"name": "ux_trip_reference", "unique": true});
+db.getCollection('trips').createIndex({"propertyId": 1, "status": 1, "pickupAt": -1}, {"name": "ix_property_status_pickup"});
+db.getCollection('trips').createIndex({"pickupAt": 1}, {"name": "ix_pickup"});
+db.getCollection('trips').createIndex({"propertyId": 1, "pickupAt": 1, "status": 1}, {"name": "ix_property_pickup_status"});
+db.getCollection('trips').createIndex({"guest.guestId": 1}, {"name": "ix_guest"});
+db.getCollection('trips').createIndex({"activeDriverId": 1}, {"name": "ux_active_driver", "unique": true, "partialFilterExpression": {"activeDriverId": {"$type": "string"}}});
+db.getCollection('trips').createIndex({"assignment.driverId": 1, "status": 1, "closedAt": -1}, {"name": "ix_driver_status_closed"});
+db.getCollection('trips').createIndex({"guest.guestId": 1, "status": 1, "createdAt": -1}, {"name": "ix_guest_status_created"});
+db.getCollection('customer_location_favorites').createIndex({"guestId": 1}, {"name": "ix_guest"});
+db.getCollection('trip_reviews').createIndex({"guestId": 1, "updatedAt": -1}, {"name": "ix_guest_updated"});
+db.getCollection('guests').createIndex({"memberIdNormalized": 1}, {"name": "ux_member_normalized", "unique": true});
+db.getCollection('guests').createIndex({"name": 1}, {"name": "ix_name"});
+db.getCollection('guests').createIndex({"phone": 1}, {"name": "ix_phone"});
+db.getCollection('guests').createIndex({"propertyId": 1, "roomNumber": 1}, {"name": "ix_property_room"});
+db.getCollection('guests').createIndex({"propertyId": 1, "tierCode": 1}, {"name": "ix_property_tier"});
+db.getCollection('qualification_references').createIndex({"tripReference": 1}, {"name": "ix_trip_reference"});
+db.getCollection('console_notifications').createIndex({"recipientUserId": 1, "isRead": 1, "occurredAt": -1}, {"name": "ix_recipient_read_occurred"});
+db.getCollection('console_notifications').createIndex({"expiresAt": 1}, {"name": "ttl_expires_at", "expireAfterSeconds": 0});
+db.getCollection('console_notifications').createIndex({"recipientUserId": 1, "eventType": 1, "occurredAt": -1}, {"name": "ix_recipient_event_occurred"});
+db.getCollection('trip_live_locations').createIndex({"expiresAt": 1}, {"name": "ttl_expires_at", "expireAfterSeconds": 0});
+db.getCollection('trip_location_points').createIndex({"tripId": 1, "seq": 1}, {"name": "ix_trip_seq"});
+db.getCollection('trip_location_points').createIndex({"expiresAt": 1}, {"name": "ttl_expires_at", "expireAfterSeconds": 0});
+db.getCollection('notification_events').createIndex({"state": 1, "nextAttemptAt": 1}, {"name": "ix_state_next_attempt"});
+db.getCollection('notification_events').createIndex({"purgeAt": 1}, {"name": "ttl_purge_at", "expireAfterSeconds": 0});

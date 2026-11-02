@@ -1,0 +1,10 @@
+node_modules/
+dist/
+unpackage/
+.hbuilderx/
+*.log
+.DS_Store
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/assets/www/
